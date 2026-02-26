@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const { initDatabase, saveDatabase, getDb } = require('./database');
+const { initDatabase, getDb } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,144 +38,188 @@ function generatePassword() {
   const c = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%';
   let p = ''; for (let i = 0; i < 12; i++) p += c.charAt(Math.floor(Math.random() * c.length)); return p;
 }
-function generateLoginCode() { const n = Math.floor(100000 + Math.random() * 900000); return n.toString().slice(0,3) + '-' + n.toString().slice(3); }
-
-function run(sql, params) { const db = getDb(); db.run(sql, params); saveDatabase(); }
-function getOne(sql, params) {
-  const db = getDb();
-  const stmt = db.prepare(sql);
-  if (params) stmt.bind(params);
-  if (stmt.step()) { const row = stmt.getAsObject(); stmt.free(); return row; }
-  stmt.free(); return null;
-}
-function getAll(sql, params) {
-  const db = getDb();
-  const stmt = db.prepare(sql);
-  if (params) stmt.bind(params);
-  const rows = [];
-  while (stmt.step()) rows.push(stmt.getAsObject());
-  stmt.free(); return rows;
-}
 
 app.post('/api/auth/register', async (req, res) => {
   try {
+    const pool = getDb();
     const dvviaId = generateDvviaId();
     const password = generatePassword();
     const hash = await bcrypt.hash(password, 10);
-    run("INSERT INTO users (dvvia_id, password_hash) VALUES (?, ?)", [dvviaId, hash]);
-    const user = getOne("SELECT id FROM users WHERE dvvia_id = ?", [dvviaId]);
-    res.json({ success: true, dvviaId, password, userId: user.id });
+    const result = await pool.query(
+      "INSERT INTO users (dvvia_id, password_hash) VALUES ($1, $2) RETURNING id",
+      [dvviaId, hash]
+    );
+    res.json({ success: true, dvviaId, password, userId: result.rows[0].id });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const { dvviaId, password } = req.body;
-  const user = getOne("SELECT * FROM users WHERE dvvia_id = ?", [dvviaId]);
-  if (!user) return res.status(404).json({ success: false, error: 'DVVIA ID not found' });
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) return res.status(401).json({ success: false, error: 'Invalid password' });
-  res.json({ success: true, userId: user.id, dvviaId: user.dvvia_id, verified: user.verified });
+  try {
+    const pool = getDb();
+    const { dvviaId, password } = req.body;
+    const result = await pool.query("SELECT * FROM users WHERE dvvia_id = $1", [dvviaId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ success: false, error: 'DVVIA ID not found' });
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) return res.status(401).json({ success: false, error: 'Invalid password' });
+    res.json({ success: true, userId: user.id, dvviaId: user.dvvia_id, verified: user.verified });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/auth/login-request', (req, res) => {
-  const { dvviaId } = req.body;
-  const user = getOne("SELECT * FROM users WHERE dvvia_id = ?", [dvviaId]);
-  if (!user) return res.status(404).json({ success: false, error: 'DVVIA ID not found' });
-  const code = generateLoginCode();
-  const expires = new Date(Date.now() + 600000).toISOString();
-  run("INSERT INTO login_codes (user_id, code, expires_at) VALUES (?, ?, ?)", [user.id, code, expires]);
-  res.json({ success: true, code, expiresAt: expires });
+app.post('/api/auth/login-request', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { dvviaId } = req.body;
+    const result = await pool.query("SELECT * FROM users WHERE dvvia_id = $1", [dvviaId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ success: false, error: 'DVVIA ID not found' });
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 600000).toISOString();
+    await pool.query("INSERT INTO login_codes (user_id, code, expires_at) VALUES ($1, $2, $3)", [user.id, code, expires]);
+    res.json({ success: true, code, expiresAt: expires });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/auth/verify', (req, res) => {
-  const { userId } = req.body;
-  run("UPDATE users SET verified = 1, verified_date = datetime('now') WHERE id = ?", [userId]);
-  res.json({ success: true });
+app.post('/api/auth/verify', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { userId } = req.body;
+    await pool.query("UPDATE users SET verified = 1, verified_date = NOW() WHERE id = $1", [userId]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/auth/add-phone', (req, res) => {
-  const { userId, phone } = req.body;
-  run("UPDATE users SET phone = ? WHERE id = ?", [phone, userId]);
-  res.json({ success: true });
+app.post('/api/auth/add-phone', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { userId, phone } = req.body;
+    await pool.query("UPDATE users SET phone = $1 WHERE id = $2", [phone, userId]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.get('/api/auth/profile/:userId', (req, res) => {
-  const user = getOne("SELECT id, dvvia_id, phone, verified, verified_date, created_at FROM users WHERE id = ?", [Number(req.params.userId)]);
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-  const listings = getOne("SELECT COUNT(*) as count FROM vehicles WHERE seller_id = ?", [user.id]);
-  const viewings = getOne("SELECT COUNT(*) as count FROM appointments WHERE buyer_id = ? OR seller_id = ?", [user.id, user.id]);
-  const noShows = getOne("SELECT COUNT(*) as count FROM no_shows WHERE user_id = ?", [user.id]);
-  res.json({ success: true, user: { ...user, totalListings: listings.count, totalViewings: viewings.count, noShows: noShows.count } });
+app.get('/api/auth/profile/:userId', async (req, res) => {
+  try {
+    const pool = getDb();
+    const uid = Number(req.params.userId);
+    const userResult = await pool.query("SELECT id, dvvia_id, phone, verified, verified_date, created_at FROM users WHERE id = $1", [uid]);
+    const user = userResult.rows[0];
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    const listings = await pool.query("SELECT COUNT(*) as count FROM vehicles WHERE seller_id = $1", [uid]);
+    const viewings = await pool.query("SELECT COUNT(*) as count FROM appointments WHERE buyer_id = $1 OR seller_id = $1", [uid]);
+    const noShows = await pool.query("SELECT COUNT(*) as count FROM no_shows WHERE user_id = $1", [uid]);
+    res.json({ success: true, user: { ...user, totalListings: listings.rows[0].count, totalViewings: viewings.rows[0].count, noShows: noShows.rows[0].count } });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/vehicles', (req, res) => {
-  const b = req.body;
-  run("INSERT INTO vehicles (seller_id, vin, year, make, model, trim_level, price, mileage, transmission, drivetrain, fuel_type, engine, exterior_color, interior_color, title_status, condition_exterior, condition_interior, condition_tires, condition_mechanical, condition_ac, condition_electronics) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [b.sellerId, b.vin, b.year, b.make, b.model, b.trimLevel, b.price, b.mileage, b.transmission, b.drivetrain, b.fuelType, b.engine, b.exteriorColor, b.interiorColor, b.titleStatus, b.conditionExterior, b.conditionInterior, b.conditionTires, b.conditionMechanical, b.conditionAc, b.conditionElectronics]);
-  const v = getOne("SELECT last_insert_rowid() as id");
-  res.json({ success: true, vehicleId: v.id });
+app.post('/api/vehicles', async (req, res) => {
+  try {
+    const pool = getDb();
+    const b = req.body;
+    const result = await pool.query(
+      "INSERT INTO vehicles (seller_id, vin, year, make, model, trim_level, price, mileage, transmission, drivetrain, fuel_type, engine, exterior_color, interior_color, title_status, condition_exterior, condition_interior, condition_tires, condition_mechanical, condition_ac, condition_electronics) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id",
+      [b.sellerId, b.vin, b.year, b.make, b.model, b.trimLevel, b.price, b.mileage, b.transmission, b.drivetrain, b.fuelType, b.engine, b.exteriorColor, b.interiorColor, b.titleStatus, b.conditionExterior, b.conditionInterior, b.conditionTires, b.conditionMechanical, b.conditionAc, b.conditionElectronics]
+    );
+    res.json({ success: true, vehicleId: result.rows[0].id });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.get('/api/vehicles', (req, res) => {
-  const vehicles = getAll("SELECT v.*, u.dvvia_id as seller_dvvia_id FROM vehicles v JOIN users u ON v.seller_id = u.id WHERE v.status = 'active' ORDER BY v.created_at DESC");
-  res.json({ success: true, vehicles });
+app.get('/api/vehicles', async (req, res) => {
+  try {
+    const pool = getDb();
+    const result = await pool.query("SELECT v.*, u.dvvia_id as seller_dvvia_id FROM vehicles v JOIN users u ON v.seller_id = u.id WHERE v.status = 'active' ORDER BY v.created_at DESC");
+    res.json({ success: true, vehicles: result.rows });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.get('/api/vehicles/:id', (req, res) => {
-  const vehicle = getOne("SELECT v.*, u.dvvia_id as seller_dvvia_id FROM vehicles v JOIN users u ON v.seller_id = u.id WHERE v.id = ?", [Number(req.params.id)]);
-  if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
-  const photos = getAll("SELECT * FROM vehicle_photos WHERE vehicle_id = ?", [vehicle.id]);
-  res.json({ success: true, vehicle, photos });
+app.get('/api/vehicles/:id', async (req, res) => {
+  try {
+    const pool = getDb();
+    const vResult = await pool.query("SELECT v.*, u.dvvia_id as seller_dvvia_id FROM vehicles v JOIN users u ON v.seller_id = u.id WHERE v.id = $1", [Number(req.params.id)]);
+    const vehicle = vResult.rows[0];
+    if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
+    const photos = await pool.query("SELECT * FROM vehicle_photos WHERE vehicle_id = $1", [vehicle.id]);
+    res.json({ success: true, vehicle, photos: photos.rows });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/vehicles/:id/verify', (req, res) => {
-  run("UPDATE vehicles SET status = 'active', verified = 1, verified_date = datetime('now') WHERE id = ?", [Number(req.params.id)]);
-  res.json({ success: true });
+app.post('/api/vehicles/:id/verify', async (req, res) => {
+  try {
+    const pool = getDb();
+    await pool.query("UPDATE vehicles SET status = 'active', verified = 1, verified_date = NOW() WHERE id = $1", [Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/appointments', (req, res) => {
-  const b = req.body;
-  const vehicle = getOne("SELECT * FROM vehicles WHERE id = ?", [b.vehicleId]);
-  if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
-  run("INSERT INTO appointments (vehicle_id, buyer_id, seller_id, location_name, location_address, appointment_date, appointment_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [b.vehicleId, b.buyerId, vehicle.seller_id, b.locationName, b.locationAddress, b.appointmentDate, b.appointmentTime]);
-  const a = getOne("SELECT last_insert_rowid() as id");
-  res.json({ success: true, appointmentId: a.id });
+app.post('/api/appointments', async (req, res) => {
+  try {
+    const pool = getDb();
+    const b = req.body;
+    const vResult = await pool.query("SELECT * FROM vehicles WHERE id = $1", [b.vehicleId]);
+    const vehicle = vResult.rows[0];
+    if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
+    const result = await pool.query(
+      "INSERT INTO appointments (vehicle_id, buyer_id, seller_id, location_name, location_address, appointment_date, appointment_time) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+      [b.vehicleId, b.buyerId, vehicle.seller_id, b.locationName, b.locationAddress, b.appointmentDate, b.appointmentTime]
+    );
+    res.json({ success: true, appointmentId: result.rows[0].id });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.get('/api/appointments/user/:userId', (req, res) => {
-  const uid = Number(req.params.userId);
-  const appointments = getAll("SELECT a.*, v.year, v.make, v.model, v.price FROM appointments a JOIN vehicles v ON a.vehicle_id = v.id WHERE a.buyer_id = ? OR a.seller_id = ? ORDER BY a.appointment_date DESC", [uid, uid]);
-  res.json({ success: true, appointments });
+app.get('/api/appointments/user/:userId', async (req, res) => {
+  try {
+    const pool = getDb();
+    const uid = Number(req.params.userId);
+    const result = await pool.query(
+      "SELECT a.*, v.year, v.make, v.model, v.price FROM appointments a JOIN vehicles v ON a.vehicle_id = v.id WHERE a.buyer_id = $1 OR a.seller_id = $1 ORDER BY a.appointment_date DESC",
+      [uid]
+    );
+    res.json({ success: true, appointments: result.rows });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/appointments/:id/arrive', (req, res) => {
-  const col = req.body.role === 'buyer' ? 'buyer_arrived' : 'seller_arrived';
-  run("UPDATE appointments SET " + col + " = 1 WHERE id = ?", [Number(req.params.id)]);
-  res.json({ success: true });
+app.post('/api/appointments/:id/arrive', async (req, res) => {
+  try {
+    const pool = getDb();
+    const col = req.body.role === 'buyer' ? 'buyer_arrived' : 'seller_arrived';
+    await pool.query(`UPDATE appointments SET ${col} = 1 WHERE id = $1`, [Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/appointments/:id/late', (req, res) => {
-  const col = req.body.role === 'buyer' ? 'buyer_late_minutes' : 'seller_late_minutes';
-  run("UPDATE appointments SET " + col + " = ? WHERE id = ?", [req.body.minutes, Number(req.params.id)]);
-  res.json({ success: true });
+app.post('/api/appointments/:id/late', async (req, res) => {
+  try {
+    const pool = getDb();
+    const col = req.body.role === 'buyer' ? 'buyer_late_minutes' : 'seller_late_minutes';
+    await pool.query(`UPDATE appointments SET ${col} = $1 WHERE id = $2`, [req.body.minutes, Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/appointments/:id/complete', (req, res) => {
-  run("UPDATE appointments SET status = 'completed', completed_at = datetime('now') WHERE id = ?", [Number(req.params.id)]);
-  res.json({ success: true });
+app.post('/api/appointments/:id/complete', async (req, res) => {
+  try {
+    const pool = getDb();
+    await pool.query("UPDATE appointments SET status = 'completed', completed_at = NOW() WHERE id = $1", [Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/appointments/:id/cancel', (req, res) => {
-  run("UPDATE appointments SET status = 'cancelled', cancelled_at = datetime('now'), cancelled_by = ? WHERE id = ?", [req.body.userId, Number(req.params.id)]);
-  res.json({ success: true });
+app.post('/api/appointments/:id/cancel', async (req, res) => {
+  try {
+    const pool = getDb();
+    await pool.query("UPDATE appointments SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $1 WHERE id = $2", [req.body.userId, Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.get('/api/health', (req, res) => {
-  const users = getOne("SELECT COUNT(*) as count FROM users");
-  const vehicles = getOne("SELECT COUNT(*) as count FROM vehicles");
-  const appointments = getOne("SELECT COUNT(*) as count FROM appointments");
-  res.json({ status: 'ok', database: 'connected', counts: { users: users.count, vehicles: vehicles.count, appointments: appointments.count } });
+app.get('/api/health', async (req, res) => {
+  try {
+    const pool = getDb();
+    const users = await pool.query("SELECT COUNT(*) as count FROM users");
+    const vehicles = await pool.query("SELECT COUNT(*) as count FROM vehicles");
+    const appointments = await pool.query("SELECT COUNT(*) as count FROM appointments");
+    res.json({ status: 'ok', database: 'connected', counts: { users: users.rows[0].count, vehicles: vehicles.rows[0].count, appointments: appointments.rows[0].count } });
+  } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
 
 async function start() {
