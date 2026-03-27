@@ -92,6 +92,7 @@ app.get('/admin', (req, res) => {
     .btn-green { background: #00c896; color: #080c14; }
     .btn-red { background: rgba(255,80,80,0.15); color: #ff5050; border: 1px solid rgba(255,80,80,0.3); }
     .btn-approve { background: rgba(0,200,150,0.15); color: #00c896; border: 1px solid rgba(0,200,150,0.3); }
+    .btn-approve:disabled { opacity: 0.35; cursor: not-allowed; }
     .btn-gray { background: rgba(255,255,255,0.06); color: #8a9bb5; border: 1px solid rgba(255,255,255,0.1); }
     .tabs { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
     .tab { padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; font-size: 14px; font-weight: 700; background: rgba(255,255,255,0.06); color: #8a9bb5; }
@@ -110,7 +111,7 @@ app.get('/admin', (req, res) => {
     .photo-label { font-size: 11px; color: #5a6a80; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
     .photo-box img { width: 100%; height: 180px; object-fit: cover; display: block; cursor: pointer; }
     .no-photo { width: 100%; height: 180px; background: rgba(255,255,255,0.03); display: flex; align-items: center; justify-content: center; color: #3a4a60; font-size: 13px; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
     .meta { font-size: 12px; color: #5a6a80; margin-bottom: 14px; }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
     .form-group { display: flex; flex-direction: column; gap: 4px; }
@@ -121,6 +122,25 @@ app.get('/admin', (req, res) => {
     #loading { color: #5a6a80; text-align: center; padding: 40px; }
     .count-badge { background: rgba(255,180,0,0.15); color: #f5a623; border-radius: 10px; padding: 2px 8px; font-size: 12px; font-weight: 700; margin-left: 6px; }
     .section-divider { height: 1px; background: rgba(255,255,255,0.06); margin: 14px 0; }
+
+    /* ── Location Picker ── */
+    .location-section { background: rgba(0,200,150,0.03); border: 1px solid rgba(0,200,150,0.12); border-radius: 12px; padding: 16px; margin-top: 14px; }
+    .location-title { font-size: 12px; font-weight: 700; color: #00c896; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px; }
+    .location-zip-row { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+    .location-zip-row input { flex: 1; padding: 10px 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: #fff; font-size: 14px; max-width: 140px; }
+    .location-zip-row input:focus { outline: none; border-color: #00c896; }
+    .btn-find { padding: 10px 16px; background: rgba(0,200,150,0.12); color: #00c896; border: 1px solid rgba(0,200,150,0.25); border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; white-space: nowrap; }
+    .btn-find:disabled { opacity: 0.4; cursor: not-allowed; }
+    .location-spots { display: flex; flex-direction: column; gap: 8px; }
+    .spot-btn { padding: 11px 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; color: #c8d6e5; font-size: 13px; cursor: pointer; text-align: left; transition: all 0.15s; }
+    .spot-btn:hover { border-color: rgba(0,200,150,0.3); background: rgba(0,200,150,0.05); }
+    .spot-btn.selected { border-color: #00c896; background: rgba(0,200,150,0.1); color: #00c896; font-weight: 700; }
+    .spot-name { font-weight: 600; }
+    .spot-addr { font-size: 12px; color: #5a6a80; margin-top: 2px; }
+    .spot-btn.selected .spot-addr { color: rgba(0,200,150,0.6); }
+    .location-loading { color: #5a6a80; font-size: 13px; padding: 8px 0; }
+    .location-error { color: #f5a623; font-size: 13px; padding: 8px 0; }
+    .location-chosen { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(0,200,150,0.08); border: 1px solid rgba(0,200,150,0.2); border-radius: 10px; margin-top: 10px; font-size: 13px; color: #00c896; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -148,6 +168,9 @@ app.get('/admin', (req, res) => {
   <script>
     let currentPwd = '${pwd}';
     let currentTab = 'users';
+
+    // Tracks selected meeting location per vehicle: { vehicleId: { name, address } }
+    const selectedLocations = {};
 
     function login() {
       currentPwd = document.getElementById('pwd-input').value;
@@ -246,6 +269,7 @@ app.get('/admin', (req, res) => {
       const vinUrl = v.vin_photo_path ? '/' + v.vin_photo_path.replace(/\\\\/g, '/') : null;
       const odomUrl = v.odometer_photo_path ? '/' + v.odometer_photo_path.replace(/\\\\/g, '/') : null;
       const date = new Date(v.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const isPending = status === 'pending' || status === 'Pending Review';
 
       return \`<div class="card" id="vcard-\${v.id}">
         <div class="card-header">
@@ -322,14 +346,130 @@ app.get('/admin', (req, res) => {
           </div>
         </div>
 
-        \${status === 'pending' || status === 'Pending Review' ? \`
+        \${isPending ? \`
+        <!-- ── LOCATION PICKER ── -->
+        <div class="location-section">
+          <div class="location-title">📍 Set Meeting Location</div>
+          <p style="font-size:12px;color:#5a6a80;margin-bottom:12px;">Enter the seller's zip code from their DL or mail photo. The system will find nearby public spots automatically.</p>
+          <div class="location-zip-row">
+            <input type="text" id="v\${v.id}-zip" placeholder="Zip code" maxlength="5" oninput="this.value=this.value.replace(/[^0-9]/g,'')" />
+            <button class="btn-find" id="v\${v.id}-find-btn" onclick="findNearbySpots(\${v.id})">Find Nearby Spots</button>
+          </div>
+          <div id="v\${v.id}-spots"></div>
+        </div>
+
         <div class="actions">
-          <button class="btn btn-approve" onclick="approveVehicle(\${v.id})">✓ Approve & Go Live</button>
+          <button class="btn btn-approve" id="v\${v.id}-approve-btn" onclick="approveVehicle(\${v.id})" disabled>✓ Approve & Go Live</button>
           <button class="btn btn-red" onclick="rejectVehicle(\${v.id})">✕ Reject Listing</button>
-        </div>\` : \`<div style="color:#00c896;font-weight:700;margin-top:8px;">\${status === 'active' ? '✓ Live' : '✕ Rejected'}</div>\`}
+        </div>\` : \`<div style="color:#00c896;font-weight:700;margin-top:8px;">\${status === 'active' ? '✓ Live — Meeting: ' + (v.meeting_location_name || '') : '✕ Rejected'}</div>\`}
       </div>\`;
     }
 
+    // ── LOCATION FINDER ──
+    async function findNearbySpots(vehicleId) {
+      const zip = document.getElementById('v' + vehicleId + '-zip').value.trim();
+      if (zip.length !== 5) { alert('Please enter a valid 5-digit zip code.'); return; }
+
+      const spotsDiv = document.getElementById('v' + vehicleId + '-spots');
+      const findBtn = document.getElementById('v' + vehicleId + '-find-btn');
+      findBtn.disabled = true;
+      spotsDiv.innerHTML = '<div class="location-loading">🔍 Finding nearby public spots...</div>';
+
+      try {
+        // Step 1: Get lat/lng from zip code using Nominatim
+        const geoRes = await fetch(
+          'https://nominatim.openstreetmap.org/search?postalcode=' + zip + '&countrycodes=us&format=json&limit=1',
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'DVVIA-Admin/1.0' } }
+        );
+        const geoData = await geoRes.json();
+        if (!geoData || geoData.length === 0) {
+          spotsDiv.innerHTML = '<div class="location-error">⚠️ Zip code not found. Try again.</div>';
+          findBtn.disabled = false;
+          return;
+        }
+
+        const lat = parseFloat(geoData[0].lat);
+        const lng = parseFloat(geoData[0].lon);
+
+        // Step 2: Query Overpass for nearby public places
+        const overpassQuery = \`
+          [out:json][timeout:15];
+          (
+            node["amenity"="police"](around:10000,\${lat},\${lng});
+            node["amenity"="post_office"](around:10000,\${lat},\${lng});
+            node["amenity"="courthouse"](around:10000,\${lat},\${lng});
+            node["amenity"="townhall"](around:10000,\${lat},\${lng});
+            node["name"~"Walmart|Target|Kroger|Meijer|Publix",i]["shop"](around:8000,\${lat},\${lng});
+            node["name"~"Walmart|Target|Kroger|Meijer|Publix",i]["amenity"](around:8000,\${lat},\${lng});
+          );
+          out body 12;
+        \`;
+
+        const overpassRes = await fetch('https://overpass-api.de/api/interpreter', {
+          method: 'POST',
+          body: 'data=' + encodeURIComponent(overpassQuery)
+        });
+        const overpassData = await overpassRes.json();
+        const elements = overpassData.elements || [];
+
+        // Deduplicate by name and build list
+        const seen = new Set();
+        const spots = [];
+        for (const el of elements) {
+          if (!el.tags) continue;
+          const name = el.tags.name || el.tags.amenity || 'Public Location';
+          const city = el.tags['addr:city'] || '';
+          const street = el.tags['addr:street'] || '';
+          const houseNum = el.tags['addr:housenumber'] || '';
+          const addr = [houseNum, street, city].filter(Boolean).join(' ') || 'Public location';
+          const key = name.toLowerCase();
+          if (!seen.has(key) && name.length > 2) {
+            seen.add(key);
+            // Label by type
+            let icon = '🏢';
+            const amenity = el.tags.amenity || '';
+            const shop = el.tags.shop || '';
+            if (amenity === 'police') icon = '🚔';
+            else if (amenity === 'post_office') icon = '📮';
+            else if (amenity === 'courthouse' || amenity === 'townhall') icon = '🏛️';
+            else if (shop === 'supermarket' || name.match(/walmart|target|kroger|meijer|publix/i)) icon = '🛒';
+            spots.push({ name, addr, icon });
+          }
+          if (spots.length >= 6) break;
+        }
+
+        if (spots.length === 0) {
+          spotsDiv.innerHTML = '<div class="location-error">⚠️ No public spots found nearby. Try a neighboring zip code.</div>';
+          findBtn.disabled = false;
+          return;
+        }
+
+        spotsDiv.innerHTML = spots.map((s, i) => \`
+          <div class="spot-btn" id="spot-\${vehicleId}-\${i}" onclick="selectSpot(\${vehicleId}, \${i}, '\${s.name.replace(/'/g,"\\\\'")}', '\${s.addr.replace(/'/g,"\\\\'")}')">
+            <div class="spot-name">\${s.icon} \${s.name}</div>
+            <div class="spot-addr">\${s.addr}</div>
+          </div>
+        \`).join('');
+
+        findBtn.disabled = false;
+      } catch (err) {
+        spotsDiv.innerHTML = '<div class="location-error">⚠️ Could not load spots. Check connection and try again.</div>';
+        findBtn.disabled = false;
+      }
+    }
+
+    function selectSpot(vehicleId, index, name, addr) {
+      // Deselect all spots for this vehicle
+      document.querySelectorAll('[id^="spot-' + vehicleId + '-"]').forEach(el => el.classList.remove('selected'));
+      // Select this one
+      document.getElementById('spot-' + vehicleId + '-' + index).classList.add('selected');
+      // Save selection
+      selectedLocations[vehicleId] = { name, address: addr };
+      // Enable approve button
+      document.getElementById('v' + vehicleId + '-approve-btn').disabled = false;
+    }
+
+    // ── USER ACTIONS ──
     function approveUser(userId) {
       fetch('/api/admin/users/' + userId + '/approve', {
         method: 'POST',
@@ -358,6 +498,7 @@ app.get('/admin', (req, res) => {
       });
     }
 
+    // ── VEHICLE ACTIONS ──
     function approveVehicle(vehicleId) {
       const year = document.getElementById('v' + vehicleId + '-year').value;
       const make = document.getElementById('v' + vehicleId + '-make').value;
@@ -367,20 +508,31 @@ app.get('/admin', (req, res) => {
       const titleStatus = document.getElementById('v' + vehicleId + '-title').value;
       const color = document.getElementById('v' + vehicleId + '-color').value;
       const transmission = document.getElementById('v' + vehicleId + '-trans').value;
+      const location = selectedLocations[vehicleId];
 
       if (!year || !make || !model || !mileage || !vin) {
         alert('Please fill in Year, Make, Model, Mileage and VIN before approving.');
+        return;
+      }
+      if (!location) {
+        alert('Please select a meeting location before approving.');
         return;
       }
 
       fetch('/api/admin/vehicles/' + vehicleId + '/approve', {
         method: 'POST',
         headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, make, model, mileage, vin, titleStatus, exteriorColor: color, transmission })
+        body: JSON.stringify({
+          year, make, model, mileage, vin,
+          titleStatus, exteriorColor: color, transmission,
+          meetingLocationName: location.name,
+          meetingLocationAddress: location.address
+        })
       }).then(r => r.json()).then(d => {
         if (d.success) {
           document.getElementById('vcard-' + vehicleId).style.opacity = '0.5';
-          document.getElementById('vcard-' + vehicleId).querySelector('.actions').innerHTML = '<span style="color:#00c896;font-weight:700;">✓ Live on DVVIA</span>';
+          document.getElementById('vcard-' + vehicleId).querySelector('.actions').innerHTML =
+            '<span style="color:#00c896;font-weight:700;">✓ Live — ' + location.name + '</span>';
           loadCounts();
         } else {
           alert('Error: ' + d.error);
@@ -558,7 +710,7 @@ app.get('/api/admin/vehicles/pending', adminAuth, async (req, res) => {
 app.post('/api/admin/vehicles/:id/approve', adminAuth, async (req, res) => {
   try {
     const pool = getDb();
-    const { year, make, model, mileage, vin, titleStatus, exteriorColor, transmission } = req.body;
+    const { year, make, model, mileage, vin, titleStatus, exteriorColor, transmission, meetingLocationName, meetingLocationAddress } = req.body;
     await pool.query(
       `UPDATE vehicles SET
         status = 'active',
@@ -571,9 +723,12 @@ app.post('/api/admin/vehicles/:id/approve', adminAuth, async (req, res) => {
         vin = $5,
         title_status = $6,
         exterior_color = $7,
-        transmission = $8
-       WHERE id = $9`,
-      [year, make, model, mileage, vin, titleStatus || 'Clean', exteriorColor, transmission, Number(req.params.id)]
+        transmission = $8,
+        meeting_location_name = $9,
+        meeting_location_address = $10
+       WHERE id = $11`,
+      [year, make, model, mileage, vin, titleStatus || 'Clean', exteriorColor, transmission,
+       meetingLocationName, meetingLocationAddress, Number(req.params.id)]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -752,6 +907,19 @@ app.get('/api/health', async (req, res) => {
 
 async function start() {
   await initDatabase();
+
+  // Add meeting location columns if they don't exist yet
+  try {
+    const pool = getDb();
+    await pool.query(`
+      ALTER TABLE vehicles
+        ADD COLUMN IF NOT EXISTS meeting_location_name TEXT,
+        ADD COLUMN IF NOT EXISTS meeting_location_address TEXT
+    `);
+  } catch (e) {
+    console.log('Note: could not add location columns:', e.message);
+  }
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('  DVVIA Backend Running on port ' + PORT);
