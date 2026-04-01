@@ -880,6 +880,52 @@ app.post('/api/appointments/:id/cancel', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// Get all listings for a specific seller
+app.get('/api/vehicles/seller/:sellerId', async (req, res) => {
+  try {
+    const pool = getDb();
+    const sid = Number(req.params.sellerId);
+    const result = await pool.query(
+      `SELECT id, year, make, model, trim_level, price, mileage,
+              transmission, exterior_color, title_status, status,
+              meeting_location_name, rejection_reason, created_at
+       FROM vehicles
+       WHERE seller_id = $1
+       ORDER BY created_at DESC`,
+      [sid]
+    );
+    res.json({ success: true, vehicles: result.rows });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// Seller updates their own listing status (sold / pending_sale / active)
+app.post('/api/vehicles/:id/status', async (req, res) => {
+  try {
+    const pool = getDb();
+    const vid = Number(req.params.id);
+    const { status, sellerId } = req.body;
+
+    const allowed = ['active', 'pending_sale', 'sold'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status.' });
+    }
+
+    // Make sure the seller owns this vehicle
+    const check = await pool.query(
+      "SELECT id FROM vehicles WHERE id = $1 AND seller_id = $2",
+      [vid, sellerId]
+    );
+    if (check.rows.length === 0) {
+      return res.status(403).json({ success: false, error: 'Not authorized.' });
+    }
+
+    await pool.query(
+      "UPDATE vehicles SET status = $1 WHERE id = $2",
+      [status, vid]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
 // ─── HEALTH ───────────────────────────────────────────────────────────────────
 
 app.get('/api/health', async (req, res) => {
