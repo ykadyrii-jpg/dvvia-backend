@@ -926,6 +926,25 @@ app.post('/api/vehicles/:id/status', async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
+// Returns booked time slots for a vehicle on a given date
+// Blocks any slot that has a non-cancelled appointment
+app.get('/api/appointments/booked-slots/:vehicleId/:date', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { vehicleId, date } = req.params;
+    const result = await pool.query(
+      `SELECT appointment_time FROM appointments
+       WHERE vehicle_id = $1
+         AND appointment_date = $2
+         AND status NOT IN ('cancelled')`,
+      [Number(vehicleId), date]
+    );
+    const bookedTimes = result.rows.map(r => r.appointment_time);
+    res.json({ success: true, bookedTimes });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // ─── HEALTH ───────────────────────────────────────────────────────────────────
 
 app.get('/api/health', async (req, res) => {
