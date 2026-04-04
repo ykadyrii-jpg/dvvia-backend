@@ -52,7 +52,19 @@ const vehicleStorage = multer.diskStorage({
   },
   filename: (req, file, cb) => { cb(null, uuidv4() + '.jpg'); }
 });
-const uploadVehicle = multer({ storage: vehicleStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+const uploadVehicle = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      let dir = 'vehicle-photos';
+      if (file.fieldname === 'title_photo') dir = 'title-photos';
+      else if (file.fieldname === 'vin_photo') dir = 'vin-photos';
+      else if (file.fieldname === 'odometer_photo') dir = 'odometer-photos';
+      cb(null, path.join(uploadsDir, dir));
+    },
+    filename: (req, file, cb) => { cb(null, uuidv4() + '.jpg'); }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 function generateDvviaId() { return 'DV-' + Math.floor(1000000 + Math.random() * 9000000); }
 function generatePassword() {
@@ -645,6 +657,7 @@ app.post('/api/vehicles', uploadVehicle.fields([
   { name: 'title_photo', maxCount: 1 },
   { name: 'vin_photo', maxCount: 1 },
   { name: 'odometer_photo', maxCount: 1 },
+  { name: 'vehicle_photos', maxCount: 20 },
 ]), async (req, res) => {
   try {
     const pool = getDb();
@@ -662,7 +675,24 @@ app.post('/api/vehicles', uploadVehicle.fields([
        titlePhotoPath, vinPhotoPath, odometerPhotoPath,
        b.meetingLocationName || null, b.meetingLocationAddress || null]
     );
-    res.json({ success: true, vehicleId: result.rows[0].id });
+    const vehicleId = result.rows[0].id;
+
+    // Save vehicle exterior/interior photos to vehicle_photos table
+    const vehiclePhotoFiles = req.files?.vehicle_photos || [];
+    const vehiclePhotoLabels = Array.isArray(req.body.vehicle_photo_labels)
+      ? req.body.vehicle_photo_labels
+      : req.body.vehicle_photo_labels ? [req.body.vehicle_photo_labels] : [];
+
+    for (let i = 0; i < vehiclePhotoFiles.length; i++) {
+      const photoPath = path.join('uploads', 'vehicle-photos', vehiclePhotoFiles[i].filename);
+      const label = vehiclePhotoLabels[i] || 'photo';
+      await pool.query(
+        'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES (, , )',
+        [vehicleId, photoPath, label]
+      );
+    }
+
+    res.json({ success: true, vehicleId });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
@@ -863,6 +893,15 @@ async function start() {
       ALTER TABLE vehicles
         ADD COLUMN IF NOT EXISTS meeting_location_name TEXT,
         ADD COLUMN IF NOT EXISTS meeting_location_address TEXT
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vehicle_photos (
+        id SERIAL PRIMARY KEY,
+        vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE CASCADE,
+        photo_path TEXT NOT NULL,
+        label TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
     `);
   } catch (e) { console.log('Note:', e.message); }
 
