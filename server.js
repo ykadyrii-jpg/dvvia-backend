@@ -86,6 +86,16 @@ function deleteFile(filePath) {
   } catch (e) { console.log('Could not delete file:', filePath, e.message); }
 }
 
+// ─── NOTIFICATION HELPER ─────────────────────────────────────────────────────
+async function createNotification(pool, userId, type, title, body) {
+  try {
+    await pool.query(
+      'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+      [userId, type, title, body]
+    );
+  } catch (e) { console.log('Notification error:', e.message); }
+}
+
 // ─── ADMIN PANEL ─────────────────────────────────────────────────────────────
 app.get('/admin', (req, res) => {
   const pwd = req.query.pwd || '';
@@ -579,6 +589,7 @@ app.post('/api/admin/users/:id/approve', adminAuth, async (req, res) => {
       [uid]
     );
     if (user) { deleteFile(user.id_photo_path); deleteFile(user.mail_photo_path); }
+    await createNotification(pool, uid, 'account_approved', 'Identity Verified ✅', 'Your DVVIA identity has been verified. You can now post vehicles and request viewings.');
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -595,6 +606,7 @@ app.post('/api/admin/users/:id/reject', adminAuth, async (req, res) => {
       [reason, uid]
     );
     if (user) { deleteFile(user.id_photo_path); deleteFile(user.mail_photo_path); }
+    await createNotification(pool, uid, 'account_rejected', 'Verification Failed', `Your identity could not be verified. Reason: ${reason}`);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -631,6 +643,11 @@ app.post('/api/admin/vehicles/:id/approve', adminAuth, async (req, res) => {
        meetingLocationName || null, meetingLocationAddress || null, vid]
     );
     if (v) { deleteFile(v.title_photo_path); deleteFile(v.vin_photo_path); deleteFile(v.odometer_photo_path); }
+    // Notify seller their listing is live
+    const sellerResult = await pool.query('SELECT seller_id FROM vehicles WHERE id = $1', [vid]);
+    if (sellerResult.rows[0]) {
+      await createNotification(pool, sellerResult.rows[0].seller_id, 'listing_approved', 'Your Listing is Live! 🚗', `Your ${make} ${model} is now live on DVVIA. Buyers can request viewings.`);
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -647,6 +664,10 @@ app.post('/api/admin/vehicles/:id/reject', adminAuth, async (req, res) => {
       [reason, vid]
     );
     if (v) { deleteFile(v.title_photo_path); deleteFile(v.vin_photo_path); deleteFile(v.odometer_photo_path); }
+    const sellerRes = await pool.query('SELECT seller_id FROM vehicles WHERE id = $1', [vid]);
+    if (sellerRes.rows[0]) {
+      await createNotification(pool, sellerRes.rows[0].seller_id, 'listing_rejected', 'Listing Not Approved', `Your listing was not approved. Reason: ${reason}`);
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -789,6 +810,8 @@ app.post('/api/appointments', async (req, res) => {
       "INSERT INTO appointments (vehicle_id, buyer_id, seller_id, location_name, location_address, appointment_date, appointment_time) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
       [b.vehicleId, b.buyerId, vehicle.seller_id, b.locationName, b.locationAddress, b.appointmentDate, b.appointmentTime]
     );
+    // Notify seller someone wants to view their car
+    await createNotification(pool, vehicle.seller_id, 'viewing_request', 'New Viewing Request 📅', `Someone wants to view your ${vehicle.make || 'vehicle'} on ${b.appointmentDate} at ${b.appointmentTime}.`);
     res.json({ success: true, appointmentId: result.rows[0].id });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -860,6 +883,44 @@ app.post('/api/appointments/:id/cancel', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// ─── NOTIFICATION ROUTES ─────────────────────────────────────────────────────
+
+// Get all notifications for a user
+app.get('/api/notifications/:userId', async (req, res) => {
+  try {
+    const pool = getDb();
+    const result = await pool.query(
+      'SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [Number(req.params.userId)]
+    );
+    res.json({ success: true, notifications: result.rows });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// Get unread count
+app.get('/api/notifications/:userId/unread-count', async (req, res) => {
+  try {
+    const pool = getDb();
+    const result = await pool.query(
+      'SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL',
+      [Number(req.params.userId)]
+    );
+    res.json({ success: true, count: Number(result.rows[0].count) });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// Mark all as read
+app.post('/api/notifications/:userId/read-all', async (req, res) => {
+  try {
+    const pool = getDb();
+    await pool.query(
+      'UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL',
+      [Number(req.params.userId)]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
 // ─── HEALTH ───────────────────────────────────────────────────────────────────
 
 app.get('/api/health', async (req, res) => {
@@ -900,6 +961,17 @@ async function start() {
         vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE CASCADE,
         photo_path TEXT NOT NULL,
         label TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        read_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
