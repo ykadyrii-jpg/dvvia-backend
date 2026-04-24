@@ -42,16 +42,6 @@ const regStorage = multer.diskStorage({
 });
 const uploadReg = multer({ storage: regStorage, limits: { fileSize: 10 * 1024 * 1024 } });
 
-const vehicleStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    let dir = 'vehicle-photos';
-    if (file.fieldname === 'title_photo') dir = 'title-photos';
-    else if (file.fieldname === 'vin_photo') dir = 'vin-photos';
-    else if (file.fieldname === 'odometer_photo') dir = 'odometer-photos';
-    cb(null, path.join(uploadsDir, dir));
-  },
-  filename: (req, file, cb) => { cb(null, uuidv4() + '.jpg'); }
-});
 const uploadVehicle = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
@@ -229,7 +219,6 @@ app.get('/admin', (req, res) => {
       }).catch(() => { document.getElementById('loading').innerHTML = 'Error loading. Check password.'; });
     }
 
-    // ── USER CARD ──
     function renderUser(u) {
       const status = u.verification_status || 'pending';
       const badgeClass = status === 'verified' ? 'badge-verified' : status === 'rejected' ? 'badge-rejected' : 'badge-pending';
@@ -258,7 +247,6 @@ app.get('/admin', (req, res) => {
       </div>\`;
     }
 
-    // ── VEHICLE CARD ──
     function renderVehicle(v) {
       const status = v.listing_status || v.status || 'pending';
       const badgeClass = status === 'active' ? 'badge-active' : status === 'rejected' ? 'badge-rejected' : 'badge-pending';
@@ -267,12 +255,8 @@ app.get('/admin', (req, res) => {
       const odomUrl = v.odometer_photo_path ? BASE + '/' + v.odometer_photo_path.replace(/\\\\/g, '/') : null;
       const date = new Date(v.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       const isPending = status === 'pending' || status === 'Pending Review';
-
-      // ── If seller already chose a location, pre-load it so approve works immediately ──
       const hasLocation = !!(v.meeting_location_name);
-      if (hasLocation) {
-        selectedLocations[v.id] = { name: v.meeting_location_name, address: v.meeting_location_address || '' };
-      }
+      if (hasLocation) selectedLocations[v.id] = { name: v.meeting_location_name, address: v.meeting_location_address || '' };
 
       return \`<div class="card" id="vcard-\${v.id}">
         <div class="card-header">
@@ -280,17 +264,14 @@ app.get('/admin', (req, res) => {
           <span class="badge \${badgeClass}">\${status}</span>
         </div>
         <div class="meta">Submitted \${date} · Asking price: <strong style="color:#00c896">\$\${Number(v.price || 0).toLocaleString()}</strong></div>
-
         <div class="photos">
           <div><div class="photo-label">Vehicle Title</div><div class="photo-box">\${titleUrl ? \`<img src="\${titleUrl}" onclick="window.open(this.src)" onerror="this.parentElement.innerHTML='<div class=no-photo>No photo</div>'" />\` : '<div class="no-photo">No photo</div>'}</div></div>
           <div><div class="photo-label">VIN Plate</div><div class="photo-box">\${vinUrl ? \`<img src="\${vinUrl}" onclick="window.open(this.src)" onerror="this.parentElement.innerHTML='<div class=no-photo>No photo</div>'" />\` : '<div class="no-photo">No photo</div>'}</div></div>
           <div><div class="photo-label">Odometer</div><div class="photo-box">\${odomUrl ? \`<img src="\${odomUrl}" onclick="window.open(this.src)" onerror="this.parentElement.innerHTML='<div class=no-photo>No photo</div>'" />\` : '<div class="no-photo">No photo</div>'}</div></div>
         </div>
         <p class="delete-notice">⚠️ Title, VIN, and odometer photos are permanently deleted after approve or reject.</p>
-
         <div class="section-divider"></div>
         <div class="photo-label" style="margin-bottom:12px">Fill in vehicle details from photos above:</div>
-
         <div class="form-grid">
           <div class="form-group"><label>Year</label><input type="number" id="v\${v.id}-year" placeholder="e.g. 2021" value="\${v.year && v.year !== new Date().getFullYear() ? v.year : ''}" /></div>
           <div class="form-group"><label>Make</label><input type="text" id="v\${v.id}-make" placeholder="e.g. Toyota" value="\${v.make && v.make !== 'Pending' ? v.make : ''}" /></div>
@@ -314,7 +295,6 @@ app.get('/admin', (req, res) => {
             </select>
           </div>
         </div>
-
         \${isPending ? \`
         <div class="location-section">
           <div class="location-title">📍 Meeting Location</div>
@@ -337,7 +317,6 @@ app.get('/admin', (req, res) => {
       </div>\`;
     }
 
-    // ── LOCATION FINDER ──
     async function findNearbySpots(vehicleId) {
       const zip = document.getElementById('v' + vehicleId + '-zip').value.trim();
       if (zip.length !== 5) { alert('Please enter a valid 5-digit zip code.'); return; }
@@ -346,21 +325,13 @@ app.get('/admin', (req, res) => {
       findBtn.disabled = true;
       spotsDiv.innerHTML = '<div class="location-loading">🔍 Finding nearby public spots...</div>';
       try {
-        const geoRes = await fetch(
-          'https://nominatim.openstreetmap.org/search?postalcode=' + zip + '&countrycodes=us&format=json&limit=1',
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'DVVIA-Admin/1.0' } }
-        );
+        const geoRes = await fetch('https://nominatim.openstreetmap.org/search?postalcode=' + zip + '&countrycodes=us&format=json&limit=1', { headers: { 'Accept-Language': 'en', 'User-Agent': 'DVVIA-Admin/1.0' } });
         const geoData = await geoRes.json();
-        if (!geoData || geoData.length === 0) {
-          spotsDiv.innerHTML = '<div class="location-error">⚠️ Zip code not found. Try again.</div>';
-          findBtn.disabled = false; return;
-        }
-        const lat = parseFloat(geoData[0].lat);
-        const lng = parseFloat(geoData[0].lon);
-        const overpassQuery = \`[out:json][timeout:15];(node["amenity"="police"](around:10000,\${lat},\${lng});node["amenity"="post_office"](around:10000,\${lat},\${lng});node["amenity"="courthouse"](around:10000,\${lat},\${lng});node["amenity"="townhall"](around:10000,\${lat},\${lng});node["name"~"Walmart|Target|Kroger|Meijer|Publix",i]["shop"](around:8000,\${lat},\${lng}););out body 12;\`;
-        const overpassRes = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery) });
-        const elements = (await overpassRes.json()).elements || [];
-        const seen = new Set(); const spots = [];
+        if (!geoData || geoData.length === 0) { spotsDiv.innerHTML = '<div class="location-error">⚠️ Zip code not found. Try again.</div>'; findBtn.disabled = false; return; }
+        const lat = parseFloat(geoData[0].lat), lng = parseFloat(geoData[0].lon);
+        const q = \`[out:json][timeout:15];(node["amenity"="police"](around:10000,\${lat},\${lng});node["amenity"="post_office"](around:10000,\${lat},\${lng});node["amenity"="courthouse"](around:10000,\${lat},\${lng});node["amenity"="townhall"](around:10000,\${lat},\${lng});node["name"~"Walmart|Target|Kroger|Meijer|Publix",i]["shop"](around:8000,\${lat},\${lng}););out body 12;\`;
+        const elements = (await (await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(q) })).json()).elements || [];
+        const seen = new Set(), spots = [];
         for (const el of elements) {
           if (!el.tags) continue;
           const name = el.tags.name || ''; if (!name || name.length < 3) continue;
@@ -368,27 +339,13 @@ app.get('/admin', (req, res) => {
           if (seen.has(name.toLowerCase())) continue; seen.add(name.toLowerCase());
           const amenity = el.tags.amenity || '';
           let icon = '🏢';
-          if (amenity === 'police') icon = '🚔';
-          else if (amenity === 'post_office') icon = '📮';
-          else if (amenity === 'courthouse' || amenity === 'townhall') icon = '🏛️';
-          else if (name.match(/walmart|target|kroger|meijer|publix/i)) icon = '🛒';
-          spots.push({ name, addr, icon });
-          if (spots.length >= 6) break;
+          if (amenity === 'police') icon = '🚔'; else if (amenity === 'post_office') icon = '📮'; else if (amenity === 'courthouse' || amenity === 'townhall') icon = '🏛️'; else if (name.match(/walmart|target|kroger|meijer|publix/i)) icon = '🛒';
+          spots.push({ name, addr, icon }); if (spots.length >= 6) break;
         }
-        if (spots.length === 0) {
-          spotsDiv.innerHTML = '<div class="location-error">⚠️ No public spots found. Try a neighboring zip code.</div>';
-          findBtn.disabled = false; return;
-        }
-        spotsDiv.innerHTML = spots.map((s, i) => \`
-          <button class="spot-btn" id="spot-\${vehicleId}-\${i}" onclick="selectSpot(\${vehicleId},\${i},'\${s.name.replace(/'/g,"\\\\'")}','\${s.addr.replace(/'/g,"\\\\'")}')">
-            <div class="spot-name">\${s.icon} \${s.name}</div>
-            <div class="spot-addr">\${s.addr}</div>
-          </button>\`).join('');
+        if (spots.length === 0) { spotsDiv.innerHTML = '<div class="location-error">⚠️ No public spots found. Try a neighboring zip code.</div>'; findBtn.disabled = false; return; }
+        spotsDiv.innerHTML = spots.map((s, i) => \`<button class="spot-btn" id="spot-\${vehicleId}-\${i}" onclick="selectSpot(\${vehicleId},\${i},'\${s.name.replace(/'/g,"\\\\'")}','\${s.addr.replace(/'/g,"\\\\'")}')"><div class="spot-name">\${s.icon} \${s.name}</div><div class="spot-addr">\${s.addr}</div></button>\`).join('');
         findBtn.disabled = false;
-      } catch (err) {
-        spotsDiv.innerHTML = '<div class="location-error">⚠️ Could not load spots. Check connection and try again.</div>';
-        findBtn.disabled = false;
-      }
+      } catch (err) { spotsDiv.innerHTML = '<div class="location-error">⚠️ Could not load spots.</div>'; findBtn.disabled = false; }
     }
 
     function selectSpot(vehicleId, index, name, addr) {
@@ -398,36 +355,23 @@ app.get('/admin', (req, res) => {
       document.getElementById('v' + vehicleId + '-approve-btn').disabled = false;
     }
 
-    // ── USER ACTIONS ──
     function approveUser(userId) {
       if (!confirm('Approve this identity? Photos will be permanently deleted from the server.')) return;
-      fetch('/api/admin/users/' + userId + '/approve', {
-        method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' }
-      }).then(r => r.json()).then(d => {
-        if (d.success) {
-          document.getElementById('card-' + userId).style.opacity = '0.5';
-          document.getElementById('card-' + userId).querySelector('.actions').innerHTML = '<span style="color:#00c896;font-weight:700;">✓ Approved — Photos deleted</span>';
-          loadCounts();
-        }
-      });
+      fetch('/api/admin/users/' + userId + '/approve', { method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' } })
+        .then(r => r.json()).then(d => {
+          if (d.success) { document.getElementById('card-' + userId).style.opacity = '0.5'; document.getElementById('card-' + userId).querySelector('.actions').innerHTML = '<span style="color:#00c896;font-weight:700;">✓ Approved — Photos deleted</span>'; loadCounts(); }
+        });
     }
 
     function rejectUser(userId) {
       const reason = prompt('Reason for rejection (optional):') || 'Documents do not match';
       if (!confirm('Reject this user? Photos will be permanently deleted from the server.')) return;
-      fetch('/api/admin/users/' + userId + '/reject', {
-        method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      }).then(r => r.json()).then(d => {
-        if (d.success) {
-          document.getElementById('card-' + userId).style.opacity = '0.5';
-          document.getElementById('card-' + userId).querySelector('.actions').innerHTML = '<span style="color:#ff5050;font-weight:700;">✕ Rejected — Photos deleted</span>';
-          loadCounts();
-        }
-      });
+      fetch('/api/admin/users/' + userId + '/reject', { method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })
+        .then(r => r.json()).then(d => {
+          if (d.success) { document.getElementById('card-' + userId).style.opacity = '0.5'; document.getElementById('card-' + userId).querySelector('.actions').innerHTML = '<span style="color:#ff5050;font-weight:700;">✕ Rejected — Photos deleted</span>'; loadCounts(); }
+        });
     }
 
-    // ── VEHICLE ACTIONS ──
     function approveVehicle(vehicleId) {
       const year = document.getElementById('v' + vehicleId + '-year').value;
       const make = document.getElementById('v' + vehicleId + '-make').value;
@@ -438,45 +382,22 @@ app.get('/admin', (req, res) => {
       const color = document.getElementById('v' + vehicleId + '-color').value;
       const transmission = document.getElementById('v' + vehicleId + '-trans').value;
       const location = selectedLocations[vehicleId];
-
-      if (!year || !make || !model || !mileage || !vin) {
-        alert('Please fill in Year, Make, Model, Mileage and VIN before approving.');
-        return;
-      }
-
+      if (!year || !make || !model || !mileage || !vin) { alert('Please fill in Year, Make, Model, Mileage and VIN before approving.'); return; }
       fetch('/api/admin/vehicles/' + vehicleId + '/approve', {
-        method: 'POST',
-        headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          year, make, model, mileage, vin,
-          titleStatus, exteriorColor: color, transmission,
-          meetingLocationName: location ? location.name : '',
-          meetingLocationAddress: location ? location.address : ''
-        })
+        method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, make, model, mileage, vin, titleStatus, exteriorColor: color, transmission, meetingLocationName: location ? location.name : '', meetingLocationAddress: location ? location.address : '' })
       }).then(r => r.json()).then(d => {
-        if (d.success) {
-          document.getElementById('vcard-' + vehicleId).style.opacity = '0.5';
-          document.getElementById('vcard-' + vehicleId).querySelector('.actions').innerHTML =
-            '<span style="color:#00c896;font-weight:700;">✓ Live — ' + (location ? location.name : 'No location') + '</span>';
-          loadCounts();
-        } else {
-          alert('Error: ' + d.error);
-        }
+        if (d.success) { document.getElementById('vcard-' + vehicleId).style.opacity = '0.5'; document.getElementById('vcard-' + vehicleId).querySelector('.actions').innerHTML = '<span style="color:#00c896;font-weight:700;">✓ Live — ' + (location ? location.name : 'No location') + '</span>'; loadCounts(); }
+        else { alert('Error: ' + d.error); }
       });
     }
 
     function rejectVehicle(vehicleId) {
       const reason = prompt('Reason for rejection:') || 'Listing did not meet DVVIA requirements';
-      fetch('/api/admin/vehicles/' + vehicleId + '/reject', {
-        method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      }).then(r => r.json()).then(d => {
-        if (d.success) {
-          document.getElementById('vcard-' + vehicleId).style.opacity = '0.5';
-          document.getElementById('vcard-' + vehicleId).querySelector('.actions').innerHTML = '<span style="color:#ff5050;font-weight:700;">✕ Rejected</span>';
-          loadCounts();
-        }
-      });
+      fetch('/api/admin/vehicles/' + vehicleId + '/reject', { method: 'POST', headers: { 'x-admin-password': currentPwd, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })
+        .then(r => r.json()).then(d => {
+          if (d.success) { document.getElementById('vcard-' + vehicleId).style.opacity = '0.5'; document.getElementById('vcard-' + vehicleId).querySelector('.actions').innerHTML = '<span style="color:#ff5050;font-weight:700;">✕ Rejected</span>'; loadCounts(); }
+        });
     }
 
     if ('${pwd}') { loadCounts(); loadTab('users'); }
@@ -549,6 +470,66 @@ app.get('/api/auth/profile/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// ─── WEB LOGIN ROUTES ─────────────────────────────────────────────────────────
+
+// User enters DVVIA ID on website → notification sent to app → app approves → website unlocks
+app.post('/api/auth/web-login-request', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { dvviaId } = req.body;
+    if (!dvviaId) return res.status(400).json({ success: false, error: 'DVVIA ID required' });
+    const result = await pool.query("SELECT id, dvvia_id, verification_status FROM users WHERE dvvia_id = $1", [dvviaId.toUpperCase()]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ success: false, error: 'DVVIA ID not found' });
+    if (user.verification_status !== 'verified') return res.status(403).json({ success: false, error: 'Account not yet verified. Complete verification in the app first.' });
+    const token = uuidv4();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    await pool.query(
+      `INSERT INTO web_login_tokens (token, user_id, expires_at, status) VALUES ($1, $2, $3, 'pending')`,
+      [token, user.id, expiresAt]
+    );
+    await createNotification(pool, user.id, 'web_login_request', 'Web Login Request 🌐', 'Someone is trying to log into dvvia.com with your DVVIA ID. Open the app to approve or deny.');
+    res.json({ success: true, token });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// Website polls every 2 seconds waiting for app approval
+app.get('/api/auth/web-login-poll/:token', async (req, res) => {
+  try {
+    const pool = getDb();
+    const result = await pool.query(
+      `SELECT wlt.*, u.dvvia_id FROM web_login_tokens wlt JOIN users u ON wlt.user_id = u.id WHERE wlt.token = $1`,
+      [req.params.token]
+    );
+    const token = result.rows[0];
+    if (!token) return res.json({ approved: false, denied: true });
+    if (new Date() > new Date(token.expires_at)) return res.json({ approved: false, denied: true, reason: 'expired' });
+    if (token.status === 'approved') return res.json({ approved: true, dvviaId: token.dvvia_id, userId: token.user_id });
+    if (token.status === 'denied') return res.json({ approved: false, denied: true });
+    res.json({ approved: false, denied: false });
+  } catch (err) { res.status(500).json({ approved: false, denied: false }); }
+});
+
+// App approves web login
+app.post('/api/auth/web-login-approve', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { token, userId } = req.body;
+    await pool.query("UPDATE web_login_tokens SET status = 'approved' WHERE token = $1 AND user_id = $2", [token, userId]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// App denies web login
+app.post('/api/auth/web-login-deny', async (req, res) => {
+  try {
+    const pool = getDb();
+    const { token, userId } = req.body;
+    await pool.query("UPDATE web_login_tokens SET status = 'denied' WHERE token = $1 AND user_id = $2", [token, userId]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
 // ─── ADMIN USER ROUTES ────────────────────────────────────────────────────────
 
 app.get('/api/admin/counts', adminAuth, async (req, res) => {
@@ -563,9 +544,7 @@ app.get('/api/admin/counts', adminAuth, async (req, res) => {
 app.get('/api/admin/users/pending', adminAuth, async (req, res) => {
   try {
     const pool = getDb();
-    const result = await pool.query(
-      "SELECT id, dvvia_id, verification_status, id_photo_path, mail_photo_path, created_at FROM users WHERE verification_status = 'pending' ORDER BY created_at DESC"
-    );
+    const result = await pool.query("SELECT id, dvvia_id, verification_status, id_photo_path, mail_photo_path, created_at FROM users WHERE verification_status = 'pending' ORDER BY created_at DESC");
     res.json({ success: true, users: result.rows });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -584,10 +563,7 @@ app.post('/api/admin/users/:id/approve', adminAuth, async (req, res) => {
     const uid = Number(req.params.id);
     const userResult = await pool.query("SELECT id_photo_path, mail_photo_path FROM users WHERE id = $1", [uid]);
     const user = userResult.rows[0];
-    await pool.query(
-      "UPDATE users SET verification_status = 'verified', verified = 1, verified_date = NOW(), id_photo_path = NULL, mail_photo_path = NULL WHERE id = $1",
-      [uid]
-    );
+    await pool.query("UPDATE users SET verification_status = 'verified', verified = 1, verified_date = NOW(), id_photo_path = NULL, mail_photo_path = NULL WHERE id = $1", [uid]);
     if (user) { deleteFile(user.id_photo_path); deleteFile(user.mail_photo_path); }
     await createNotification(pool, uid, 'account_approved', 'Identity Verified ✅', 'Your DVVIA identity has been verified. You can now post vehicles and request viewings.');
     res.json({ success: true });
@@ -601,10 +577,7 @@ app.post('/api/admin/users/:id/reject', adminAuth, async (req, res) => {
     const reason = req.body.reason || 'Documents do not match';
     const userResult = await pool.query("SELECT id_photo_path, mail_photo_path FROM users WHERE id = $1", [uid]);
     const user = userResult.rows[0];
-    await pool.query(
-      "UPDATE users SET verification_status = 'rejected', rejection_reason = $1, id_photo_path = NULL, mail_photo_path = NULL WHERE id = $2",
-      [reason, uid]
-    );
+    await pool.query("UPDATE users SET verification_status = 'rejected', rejection_reason = $1, id_photo_path = NULL, mail_photo_path = NULL WHERE id = $2", [reason, uid]);
     if (user) { deleteFile(user.id_photo_path); deleteFile(user.mail_photo_path); }
     await createNotification(pool, uid, 'account_rejected', 'Verification Failed', `Your identity could not be verified. Reason: ${reason}`);
     res.json({ success: true });
@@ -617,10 +590,7 @@ app.get('/api/admin/vehicles/pending', adminAuth, async (req, res) => {
   try {
     const pool = getDb();
     const result = await pool.query(
-      `SELECT v.*, u.dvvia_id as seller_dvvia_id
-       FROM vehicles v JOIN users u ON v.seller_id = u.id
-       WHERE v.status != 'active' OR v.title_status = 'Pending Review'
-       ORDER BY v.created_at DESC`
+      `SELECT v.*, u.dvvia_id as seller_dvvia_id FROM vehicles v JOIN users u ON v.seller_id = u.id WHERE v.status != 'active' OR v.title_status = 'Pending Review' ORDER BY v.created_at DESC`
     );
     res.json({ success: true, vehicles: result.rows });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -631,23 +601,14 @@ app.post('/api/admin/vehicles/:id/approve', adminAuth, async (req, res) => {
     const pool = getDb();
     const vid = Number(req.params.id);
     const { year, make, model, mileage, vin, titleStatus, exteriorColor, transmission, meetingLocationName, meetingLocationAddress } = req.body;
-    const vResult = await pool.query("SELECT title_photo_path, vin_photo_path, odometer_photo_path FROM vehicles WHERE id = $1", [vid]);
+    const vResult = await pool.query("SELECT title_photo_path, vin_photo_path, odometer_photo_path, seller_id FROM vehicles WHERE id = $1", [vid]);
     const v = vResult.rows[0];
     await pool.query(
-      `UPDATE vehicles SET status='active', verified=1, verified_date=NOW(),
-        year=$1, make=$2, model=$3, mileage=$4, vin=$5, title_status=$6,
-        exterior_color=$7, transmission=$8, meeting_location_name=$9, meeting_location_address=$10,
-        title_photo_path=NULL, vin_photo_path=NULL, odometer_photo_path=NULL
-       WHERE id=$11`,
-      [year, make, model, mileage, vin, titleStatus || 'Clean', exteriorColor, transmission,
-       meetingLocationName || null, meetingLocationAddress || null, vid]
+      `UPDATE vehicles SET status='active', verified=1, verified_date=NOW(), year=$1, make=$2, model=$3, mileage=$4, vin=$5, title_status=$6, exterior_color=$7, transmission=$8, meeting_location_name=$9, meeting_location_address=$10, title_photo_path=NULL, vin_photo_path=NULL, odometer_photo_path=NULL WHERE id=$11`,
+      [year, make, model, mileage, vin, titleStatus || 'Clean', exteriorColor, transmission, meetingLocationName || null, meetingLocationAddress || null, vid]
     );
     if (v) { deleteFile(v.title_photo_path); deleteFile(v.vin_photo_path); deleteFile(v.odometer_photo_path); }
-    // Notify seller their listing is live
-    const sellerResult = await pool.query('SELECT seller_id FROM vehicles WHERE id = $1', [vid]);
-    if (sellerResult.rows[0]) {
-      await createNotification(pool, sellerResult.rows[0].seller_id, 'listing_approved', 'Your Listing is Live! 🚗', `Your ${make} ${model} is now live on DVVIA. Buyers can request viewings.`);
-    }
+    if (v?.seller_id) await createNotification(pool, v.seller_id, 'listing_approved', 'Your Listing is Live! 🚗', `Your ${make} ${model} is now live on DVVIA. Buyers can request viewings.`);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -657,17 +618,11 @@ app.post('/api/admin/vehicles/:id/reject', adminAuth, async (req, res) => {
     const pool = getDb();
     const vid = Number(req.params.id);
     const reason = req.body.reason || 'Listing did not meet DVVIA requirements';
-    const vResult = await pool.query("SELECT title_photo_path, vin_photo_path, odometer_photo_path FROM vehicles WHERE id = $1", [vid]);
+    const vResult = await pool.query("SELECT title_photo_path, vin_photo_path, odometer_photo_path, seller_id FROM vehicles WHERE id = $1", [vid]);
     const v = vResult.rows[0];
-    await pool.query(
-      "UPDATE vehicles SET status='rejected', rejection_reason=$1, title_photo_path=NULL, vin_photo_path=NULL, odometer_photo_path=NULL WHERE id=$2",
-      [reason, vid]
-    );
+    await pool.query("UPDATE vehicles SET status='rejected', rejection_reason=$1, title_photo_path=NULL, vin_photo_path=NULL, odometer_photo_path=NULL WHERE id=$2", [reason, vid]);
     if (v) { deleteFile(v.title_photo_path); deleteFile(v.vin_photo_path); deleteFile(v.odometer_photo_path); }
-    const sellerRes = await pool.query('SELECT seller_id FROM vehicles WHERE id = $1', [vid]);
-    if (sellerRes.rows[0]) {
-      await createNotification(pool, sellerRes.rows[0].seller_id, 'listing_rejected', 'Listing Not Approved', `Your listing was not approved. Reason: ${reason}`);
-    }
+    if (v?.seller_id) await createNotification(pool, v.seller_id, 'listing_rejected', 'Listing Not Approved', `Your listing was not approved. Reason: ${reason}`);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -698,17 +653,16 @@ app.post('/api/vehicles', uploadVehicle.fields([
     );
     const vehicleId = result.rows[0].id;
 
-    // Save vehicle exterior/interior photos to vehicle_photos table
+    // ── Fixed: save vehicle exterior/interior photos correctly ──
     const vehiclePhotoFiles = req.files?.vehicle_photos || [];
     const vehiclePhotoLabels = Array.isArray(req.body.vehicle_photo_labels)
       ? req.body.vehicle_photo_labels
       : req.body.vehicle_photo_labels ? [req.body.vehicle_photo_labels] : [];
-
     for (let i = 0; i < vehiclePhotoFiles.length; i++) {
       const photoPath = path.join('uploads', 'vehicle-photos', vehiclePhotoFiles[i].filename);
       const label = vehiclePhotoLabels[i] || 'photo';
       await pool.query(
-        'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES (, , )',
+        'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
         [vehicleId, photoPath, label]
       );
     }
@@ -717,7 +671,6 @@ app.post('/api/vehicles', uploadVehicle.fields([
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Public listings — never return sensitive document photo paths
 app.get('/api/vehicles', async (req, res) => {
   try {
     const pool = getDb();
@@ -767,22 +720,17 @@ app.post('/api/vehicles/:id/verify', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Get all listings for a specific seller
 app.get('/api/vehicles/seller/:sellerId', async (req, res) => {
   try {
     const pool = getDb();
     const result = await pool.query(
-      `SELECT id, year, make, model, trim_level, price, mileage,
-              transmission, exterior_color, title_status, status,
-              meeting_location_name, rejection_reason, created_at
-       FROM vehicles WHERE seller_id = $1 ORDER BY created_at DESC`,
+      `SELECT id, year, make, model, trim_level, price, mileage, transmission, exterior_color, title_status, status, meeting_location_name, rejection_reason, created_at FROM vehicles WHERE seller_id = $1 ORDER BY created_at DESC`,
       [Number(req.params.sellerId)]
     );
     res.json({ success: true, vehicles: result.rows });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Seller updates their own listing status (sold / pending_sale / active)
 app.post('/api/vehicles/:id/status', async (req, res) => {
   try {
     const pool = getDb();
@@ -810,7 +758,6 @@ app.post('/api/appointments', async (req, res) => {
       "INSERT INTO appointments (vehicle_id, buyer_id, seller_id, location_name, location_address, appointment_date, appointment_time) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
       [b.vehicleId, b.buyerId, vehicle.seller_id, b.locationName, b.locationAddress, b.appointmentDate, b.appointmentTime]
     );
-    // Notify seller someone wants to view their car
     await createNotification(pool, vehicle.seller_id, 'viewing_request', 'New Viewing Request 📅', `Someone wants to view your ${vehicle.make || 'vehicle'} on ${b.appointmentDate} at ${b.appointmentTime}.`);
     res.json({ success: true, appointmentId: result.rows[0].id });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -821,28 +768,20 @@ app.get('/api/appointments/user/:userId', async (req, res) => {
     const pool = getDb();
     const uid = Number(req.params.userId);
     const result = await pool.query(
-      `SELECT a.*, v.year, v.make, v.model, v.price,
-              buyer.dvvia_id as buyer_dvvia_id, seller.dvvia_id as seller_dvvia_id
-       FROM appointments a
-       JOIN vehicles v ON a.vehicle_id = v.id
-       JOIN users buyer ON a.buyer_id = buyer.id
-       JOIN users seller ON a.seller_id = seller.id
-       WHERE a.buyer_id = $1 OR a.seller_id = $1
-       ORDER BY a.appointment_date DESC`,
-      [uid]
+      `SELECT a.*, v.year, v.make, v.model, v.price, buyer.dvvia_id as buyer_dvvia_id, seller.dvvia_id as seller_dvvia_id
+       FROM appointments a JOIN vehicles v ON a.vehicle_id = v.id JOIN users buyer ON a.buyer_id = buyer.id JOIN users seller ON a.seller_id = seller.id
+       WHERE a.buyer_id = $1 OR a.seller_id = $1 ORDER BY a.appointment_date DESC`, [uid]
     );
     res.json({ success: true, appointments: result.rows });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Returns booked time slots for a vehicle on a given date
 app.get('/api/appointments/booked-slots/:vehicleId/:date', async (req, res) => {
   try {
     const pool = getDb();
     const { vehicleId, date } = req.params;
     const result = await pool.query(
-      `SELECT appointment_time FROM appointments
-       WHERE vehicle_id = $1 AND appointment_date = $2 AND status NOT IN ('cancelled')`,
+      `SELECT appointment_time FROM appointments WHERE vehicle_id = $1 AND appointment_date = $2 AND status NOT IN ('cancelled')`,
       [Number(vehicleId), date]
     );
     res.json({ success: true, bookedTimes: result.rows.map(r => r.appointment_time) });
@@ -883,40 +822,28 @@ app.post('/api/appointments/:id/cancel', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// ─── NOTIFICATION ROUTES ─────────────────────────────────────────────────────
+// ─── NOTIFICATION ROUTES ──────────────────────────────────────────────────────
 
-// Get all notifications for a user
 app.get('/api/notifications/:userId', async (req, res) => {
   try {
     const pool = getDb();
-    const result = await pool.query(
-      'SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-      [Number(req.params.userId)]
-    );
+    const result = await pool.query('SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50', [Number(req.params.userId)]);
     res.json({ success: true, notifications: result.rows });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Get unread count
 app.get('/api/notifications/:userId/unread-count', async (req, res) => {
   try {
     const pool = getDb();
-    const result = await pool.query(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL',
-      [Number(req.params.userId)]
-    );
+    const result = await pool.query('SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL', [Number(req.params.userId)]);
     res.json({ success: true, count: Number(result.rows[0].count) });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Mark all as read
 app.post('/api/notifications/:userId/read-all', async (req, res) => {
   try {
     const pool = getDb();
-    await pool.query(
-      'UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL',
-      [Number(req.params.userId)]
-    );
+    await pool.query('UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL', [Number(req.params.userId)]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -931,16 +858,7 @@ app.get('/api/health', async (req, res) => {
     const appointments = await pool.query("SELECT COUNT(*) as count FROM appointments");
     const pendingUsers = await pool.query("SELECT COUNT(*) as count FROM users WHERE verification_status = 'pending'");
     const pendingVehicles = await pool.query("SELECT COUNT(*) as count FROM vehicles WHERE status != 'active'");
-    res.json({
-      status: 'ok', database: 'connected',
-      counts: {
-        users: users.rows[0].count,
-        vehicles: vehicles.rows[0].count,
-        appointments: appointments.rows[0].count,
-        pendingUsers: pendingUsers.rows[0].count,
-        pendingVehicles: pendingVehicles.rows[0].count,
-      }
-    });
+    res.json({ status: 'ok', database: 'connected', counts: { users: users.rows[0].count, vehicles: vehicles.rows[0].count, appointments: appointments.rows[0].count, pendingUsers: pendingUsers.rows[0].count, pendingVehicles: pendingVehicles.rows[0].count } });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
 
@@ -950,11 +868,7 @@ async function start() {
   await initDatabase();
   try {
     const pool = getDb();
-    await pool.query(`
-      ALTER TABLE vehicles
-        ADD COLUMN IF NOT EXISTS meeting_location_name TEXT,
-        ADD COLUMN IF NOT EXISTS meeting_location_address TEXT
-    `);
+    await pool.query(`ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS meeting_location_name TEXT, ADD COLUMN IF NOT EXISTS meeting_location_address TEXT`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS vehicle_photos (
         id SERIAL PRIMARY KEY,
@@ -972,6 +886,16 @@ async function start() {
         title TEXT NOT NULL,
         body TEXT NOT NULL,
         read_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS web_login_tokens (
+        id SERIAL PRIMARY KEY,
+        token TEXT UNIQUE NOT NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'pending',
+        expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
