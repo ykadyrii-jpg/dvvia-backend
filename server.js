@@ -77,11 +77,11 @@ function deleteFile(filePath) {
 }
 
 // ─── NOTIFICATION HELPER ─────────────────────────────────────────────────────
-async function createNotification(pool, userId, type, title, body) {
+async function createNotification(pool, userId, type, title, body, meta = null) {
   try {
     await pool.query(
-      'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
-      [userId, type, title, body]
+      'INSERT INTO notifications (user_id, type, title, body, meta) VALUES ($1, $2, $3, $4, $5)',
+      [userId, type, title, body, meta ? JSON.stringify(meta) : null]
     );
   } catch (e) { console.log('Notification error:', e.message); }
 }
@@ -488,7 +488,7 @@ app.post('/api/auth/web-login-request', async (req, res) => {
       `INSERT INTO web_login_tokens (token, user_id, expires_at, status) VALUES ($1, $2, $3, 'pending')`,
       [token, user.id, expiresAt]
     );
-    await createNotification(pool, user.id, 'web_login_request', 'Web Login Request 🌐', 'Someone is trying to log into dvvia.com with your DVVIA ID. Open the app to approve or deny.');
+    await createNotification(pool, user.id, 'web_login_request', 'Web Login Request 🌐', 'Someone is trying to log into dvvia.com with your DVVIA ID. Tap to approve or deny.', { token });
     res.json({ success: true, token });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -869,6 +869,7 @@ async function start() {
   try {
     const pool = getDb();
     await pool.query(`ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS meeting_location_name TEXT, ADD COLUMN IF NOT EXISTS meeting_location_address TEXT`);
+    await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS meta TEXT`).catch(() => {});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS vehicle_photos (
         id SERIAL PRIMARY KEY,
@@ -885,6 +886,7 @@ async function start() {
         type TEXT NOT NULL,
         title TEXT NOT NULL,
         body TEXT NOT NULL,
+        meta TEXT,
         read_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW()
       )
