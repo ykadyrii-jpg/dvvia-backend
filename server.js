@@ -682,7 +682,8 @@ app.get('/api/vehicles', async (req, res) => {
               v.condition_mechanical, v.condition_ac, v.condition_electronics,
               v.meeting_location_name, v.meeting_location_address,
               v.verified, v.verified_date, v.created_at, v.status,
-              u.dvvia_id as seller_dvvia_id
+              u.dvvia_id as seller_dvvia_id,
+              (SELECT photo_path FROM vehicle_photos WHERE vehicle_id = v.id ORDER BY id ASC LIMIT 1) as first_photo
        FROM vehicles v JOIN users u ON v.seller_id = u.id
        WHERE v.status = 'active' ORDER BY v.created_at DESC`
     );
