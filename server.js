@@ -659,7 +659,7 @@ app.post('/api/vehicles', uploadVehicle.fields([
       ? req.body.vehicle_photo_labels
       : req.body.vehicle_photo_labels ? [req.body.vehicle_photo_labels] : [];
     for (let i = 0; i < vehiclePhotoFiles.length; i++) {
-      const photoPath = path.join('uploads', 'vehicle-photos', vehiclePhotoFiles[i].filename);
+      const photoPath = 'uploads/vehicle-photos/' + vehiclePhotoFiles[i].filename;
       const label = vehiclePhotoLabels[i] || 'photo';
       await pool.query(
         'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
@@ -847,6 +847,18 @@ app.post('/api/notifications/:userId/read-all', async (req, res) => {
     await pool.query('UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL', [Number(req.params.userId)]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// ─── DEBUG — check vehicle photos in database ────────────────────────────────
+app.get('/api/debug/photos/:vehicleId', async (req, res) => {
+  try {
+    const pool = getDb();
+    const result = await pool.query(
+      'SELECT * FROM vehicle_photos WHERE vehicle_id = $1',
+      [Number(req.params.vehicleId)]
+    );
+    res.json({ success: true, count: result.rows.length, photos: result.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── HEALTH ───────────────────────────────────────────────────────────────────
