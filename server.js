@@ -49,7 +49,9 @@ const uploadVehicle = multer({
       if (file.fieldname === 'title_photo') dir = 'title-photos';
       else if (file.fieldname === 'vin_photo') dir = 'vin-photos';
       else if (file.fieldname === 'odometer_photo') dir = 'odometer-photos';
-      cb(null, path.join(uploadsDir, dir));
+      const fullDir = path.join(uploadsDir, dir);
+      fs.mkdirSync(fullDir, { recursive: true });
+      cb(null, fullDir);
     },
     filename: (req, file, cb) => { cb(null, uuidv4() + '.jpg'); }
   }),
@@ -472,7 +474,6 @@ app.get('/api/auth/profile/:userId', async (req, res) => {
 
 // ─── WEB LOGIN ROUTES ─────────────────────────────────────────────────────────
 
-// User enters DVVIA ID on website → notification sent to app → app approves → website unlocks
 app.post('/api/auth/web-login-request', async (req, res) => {
   try {
     const pool = getDb();
@@ -483,7 +484,7 @@ app.post('/api/auth/web-login-request', async (req, res) => {
     if (!user) return res.status(404).json({ success: false, error: 'DVVIA ID not found' });
     if (user.verification_status !== 'verified') return res.status(403).json({ success: false, error: 'Account not yet verified. Complete verification in the app first.' });
     const token = uuidv4();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await pool.query(
       `INSERT INTO web_login_tokens (token, user_id, expires_at, status) VALUES ($1, $2, $3, 'pending')`,
       [token, user.id, expiresAt]
@@ -493,7 +494,6 @@ app.post('/api/auth/web-login-request', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Website polls every 2 seconds waiting for app approval
 app.get('/api/auth/web-login-poll/:token', async (req, res) => {
   try {
     const pool = getDb();
@@ -510,7 +510,6 @@ app.get('/api/auth/web-login-poll/:token', async (req, res) => {
   } catch (err) { res.status(500).json({ approved: false, denied: false }); }
 });
 
-// App approves web login
 app.post('/api/auth/web-login-approve', async (req, res) => {
   try {
     const pool = getDb();
@@ -520,7 +519,6 @@ app.post('/api/auth/web-login-approve', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// App denies web login
 app.post('/api/auth/web-login-deny', async (req, res) => {
   try {
     const pool = getDb();
@@ -642,12 +640,12 @@ app.post('/api/vehicles', uploadVehicle.fields([
     const vinPhotoPath = req.files?.vin_photo?.[0] ? path.join('uploads', 'vin-photos', req.files.vin_photo[0].filename) : null;
     const odometerPhotoPath = req.files?.odometer_photo?.[0] ? path.join('uploads', 'odometer-photos', req.files.odometer_photo[0].filename) : null;
     const result = await pool.query(
-      `INSERT INTO vehicles (seller_id, vin, year, make, model, trim_level, price, mileage, transmission, drivetrain, fuel_type, engine, exterior_color, interior_color, title_status, condition_exterior, condition_interior, condition_tires, condition_mechanical, condition_ac, condition_electronics, title_photo_path, vin_photo_path, odometer_photo_path, meeting_location_name, meeting_location_address, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'pending') RETURNING id`,
+      `INSERT INTO vehicles (seller_id, vin, year, make, model, trim_level, price, mileage, transmission, drivetrain, fuel_type, engine, exterior_color, interior_color, title_status, condition_exterior, condition_interior, condition_tires, condition_mechanical, condition_ac, condition_electronics, condition_odor, condition_frame, title_photo_path, vin_photo_path, odometer_photo_path, meeting_location_name, meeting_location_address, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,'pending') RETURNING id`,
       [b.sellerId, b.vin || 'PENDING', b.year, b.make, b.model, b.trimLevel, b.price, b.mileage,
        b.transmission, b.drivetrain, b.fuelType, b.engine, b.exteriorColor, b.interiorColor,
        b.titleStatus || 'Pending Review', b.conditionExterior, b.conditionInterior, b.conditionTires,
-       b.conditionMechanical, b.conditionAc, b.conditionElectronics,
+       b.conditionMechanical, b.conditionAc, b.conditionElectronics, b.conditionOdor, b.conditionFrame,
        titlePhotoPath, vinPhotoPath, odometerPhotoPath,
        b.meetingLocationName || null, b.meetingLocationAddress || null]
     );
@@ -681,6 +679,7 @@ app.get('/api/vehicles', async (req, res) => {
               v.exterior_color, v.interior_color, v.title_status, v.vin,
               v.condition_exterior, v.condition_interior, v.condition_tires,
               v.condition_mechanical, v.condition_ac, v.condition_electronics,
+              v.condition_odor, v.condition_frame,
               v.meeting_location_name, v.meeting_location_address,
               v.verified, v.verified_date, v.created_at, v.status,
               u.dvvia_id as seller_dvvia_id,
@@ -701,6 +700,7 @@ app.get('/api/vehicles/:id', async (req, res) => {
               v.exterior_color, v.interior_color, v.title_status, v.vin,
               v.condition_exterior, v.condition_interior, v.condition_tires,
               v.condition_mechanical, v.condition_ac, v.condition_electronics,
+              v.condition_odor, v.condition_frame,
               v.meeting_location_name, v.meeting_location_address,
               v.verified, v.verified_date, v.created_at, v.status,
               u.dvvia_id as seller_dvvia_id
@@ -850,7 +850,8 @@ app.post('/api/notifications/:userId/read-all', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// ─── DEBUG — check vehicle photos in database ────────────────────────────────
+// ─── DEBUG ────────────────────────────────────────────────────────────────────
+
 app.get('/api/debug/photos/:vehicleId', async (req, res) => {
   try {
     const pool = getDb();
@@ -883,6 +884,7 @@ async function start() {
   try {
     const pool = getDb();
     await pool.query(`ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS meeting_location_name TEXT, ADD COLUMN IF NOT EXISTS meeting_location_address TEXT`);
+    await pool.query(`ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS condition_odor TEXT, ADD COLUMN IF NOT EXISTS condition_frame TEXT`).catch(() => {});
     await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS meta TEXT`).catch(() => {});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS vehicle_photos (
