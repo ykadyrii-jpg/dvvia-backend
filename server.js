@@ -653,8 +653,9 @@ app.post('/api/vehicles', uploadVehicle.fields([
     );
     const vehicleId = result.rows[0].id;
 
-    // ── Fixed: save vehicle exterior/interior photos correctly ──
+    // ── Save vehicle exterior/interior photos ──
     const vehiclePhotoFiles = req.files?.vehicle_photos || [];
+    console.log(`Vehicle ${vehicleId}: received ${vehiclePhotoFiles.length} exterior photos, fields:`, Object.keys(req.files || {}));
     const vehiclePhotoLabels = Array.isArray(req.body.vehicle_photo_labels)
       ? req.body.vehicle_photo_labels
       : req.body.vehicle_photo_labels ? [req.body.vehicle_photo_labels] : [];
