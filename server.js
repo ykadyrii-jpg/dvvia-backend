@@ -714,6 +714,32 @@ app.get('/api/vehicles/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// ─── UPLOAD INDIVIDUAL VEHICLE PHOTO ─────────────────────────────────────────
+app.post('/api/vehicles/:id/photos', multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(uploadsDir, 'vehicle-photos');
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => { cb(null, uuidv4() + '.jpg'); }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).single('photo'), async (req, res) => {
+  try {
+    const pool = getDb();
+    const vid = Number(req.params.id);
+    if (!req.file) return res.status(400).json({ success: false, error: 'No photo received' });
+    const photoPath = 'uploads/vehicle-photos/' + req.file.filename;
+    const label = req.body.label || 'photo';
+    await pool.query(
+      'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
+      [vid, photoPath, label]
+    );
+    res.json({ success: true, photoPath });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
 app.post('/api/vehicles/:id/verify', async (req, res) => {
   try {
     const pool = getDb();
