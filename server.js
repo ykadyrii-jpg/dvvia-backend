@@ -664,12 +664,18 @@ app.post('/api/vehicles', uploadVehicle.fields([
     for (let i = 0; i < vehiclePhotoCount; i++) {
       const file = req.files?.[`vehicle_photo_${i}`]?.[0];
       const label = b[`vehicle_label_${i}`] || 'photo';
+      console.log(`Photo ${i}: file=${file ? file.filename : 'MISSING'}, label=${label}`);
       if (file) {
         const photoPath = 'uploads/vehicle-photos/' + file.filename;
-        await pool.query(
-          'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
-          [vehicleId, photoPath, label]
-        );
+        try {
+          await pool.query(
+            'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
+            [vehicleId, photoPath, label]
+          );
+          console.log(`Photo ${i} saved: ${photoPath}`);
+        } catch (photoErr) {
+          console.log(`Photo ${i} DB error:`, photoErr.message);
+        }
       }
     }
 
