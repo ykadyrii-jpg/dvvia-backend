@@ -631,7 +631,14 @@ app.post('/api/vehicles', uploadVehicle.fields([
   { name: 'title_photo', maxCount: 1 },
   { name: 'vin_photo', maxCount: 1 },
   { name: 'odometer_photo', maxCount: 1 },
-  { name: 'vehicle_photos', maxCount: 20 },
+  { name: 'vehicle_photo_0', maxCount: 1 },
+  { name: 'vehicle_photo_1', maxCount: 1 },
+  { name: 'vehicle_photo_2', maxCount: 1 },
+  { name: 'vehicle_photo_3', maxCount: 1 },
+  { name: 'vehicle_photo_4', maxCount: 1 },
+  { name: 'vehicle_photo_5', maxCount: 1 },
+  { name: 'vehicle_photo_6', maxCount: 1 },
+  { name: 'vehicle_photo_7', maxCount: 1 },
 ]), async (req, res) => {
   try {
     const pool = getDb();
@@ -651,19 +658,19 @@ app.post('/api/vehicles', uploadVehicle.fields([
     );
     const vehicleId = result.rows[0].id;
 
-    // ── Save vehicle exterior/interior photos ──
-    const vehiclePhotoFiles = req.files?.vehicle_photos || [];
-    console.log(`Vehicle ${vehicleId}: received ${vehiclePhotoFiles.length} exterior photos, fields:`, Object.keys(req.files || {}));
-    const vehiclePhotoLabels = Array.isArray(req.body.vehicle_photo_labels)
-      ? req.body.vehicle_photo_labels
-      : req.body.vehicle_photo_labels ? [req.body.vehicle_photo_labels] : [];
-    for (let i = 0; i < vehiclePhotoFiles.length; i++) {
-      const photoPath = 'uploads/vehicle-photos/' + vehiclePhotoFiles[i].filename;
-      const label = vehiclePhotoLabels[i] || 'photo';
-      await pool.query(
-        'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
-        [vehicleId, photoPath, label]
-      );
+    // ── Save vehicle exterior/interior photos (each has unique field name) ──
+    const vehiclePhotoCount = parseInt(b.vehicle_photo_count || '0');
+    console.log(`Vehicle ${vehicleId}: received ${vehiclePhotoCount} exterior photos, fields:`, Object.keys(req.files || {}));
+    for (let i = 0; i < vehiclePhotoCount; i++) {
+      const file = req.files?.[`vehicle_photo_${i}`]?.[0];
+      const label = b[`vehicle_label_${i}`] || 'photo';
+      if (file) {
+        const photoPath = 'uploads/vehicle-photos/' + file.filename;
+        await pool.query(
+          'INSERT INTO vehicle_photos (vehicle_id, photo_path, label) VALUES ($1, $2, $3)',
+          [vehicleId, photoPath, label]
+        );
+      }
     }
 
     res.json({ success: true, vehicleId });
