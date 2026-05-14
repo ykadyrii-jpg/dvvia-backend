@@ -951,7 +951,43 @@ async function start() {
       )
     `);
   } catch (e) { console.log('Note:', e.message); }
+// ── Re-verification endpoint (Force Logout / Account Recovery) ──
+app.post('/api/auth/reverify', uploadVehicle.fields([
+  { name: 'id_photo', maxCount: 1 },
+  { name: 'mail_photo', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    const { userId, dvviaId, mode } = req.body;
+    if (!userId || !dvviaId) return res.status(400).json({ success: false, error: 'Missing user info' });
 
+    const idPhotoPath = req.files?.id_photo?.[0] ? 'uploads/id-photos/' + req.files.id_photo[0].filename : null;
+    const mailPhotoPath = req.files?.mail_photo?.[0] ? 'uploads/mail-photos/' + req.files.mail_photo[0].filename : null;
+
+    if (!idPhotoPath || !mailPhotoPath) return res.status(400).json({ success: false, error: 'Both documents are required' });
+
+    const db = getDb();
+
+    // Set user to pending — preserves all history
+    await db.query(
+      `UPDATE users SET verified = false, verification_status = 'pending',
+       reverify_mode = $1, reverify_id_photo = $2, reverify_mail_photo = $3,
+       reverify_submitted_at = NOW()
+       WHERE id = $4`,
+      [mode, idPhotoPath, mailPhotoPath, userId]
+    );
+
+    // If force logout, clear all login tokens
+    if (mode === 'force_logout') {
+      await db.query(`DELETE FROM login_tokens WHERE user_id = $1`, [userId]);
+    }
+
+    console.log(`Re-verification submitted: userId=${userId}, dvviaId=${dvviaId}, mode=${mode}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Reverify error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
   app.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('  DVVIA Backend Running on port ' + PORT);
