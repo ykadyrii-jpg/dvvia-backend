@@ -897,7 +897,7 @@ app.get('/api/debug/photos/:vehicleId', async (req, res) => {
 });
 
 // ─── HEALTH ───────────────────────────────────────────────────────────────────
-
+reverify_endpoint.js
 app.get('/api/health', async (req, res) => {
   try {
     const pool = getDb();
