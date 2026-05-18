@@ -7,6 +7,24 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { initDatabase, getDb } = require('./database');
 
+const { Expo } = require('expo-server-sdk');
+const expo = new Expo();
+
+async function sendPushNotification(userId, title, body, data = {}) {
+  try {
+    const result = await pool.query(
+      'SELECT token FROM push_tokens WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5',
+      [userId]
+    );
+    if (result.rows.length === 0) return;
+    const messages = result.rows
+      .filter(row => Expo.isExpoPushToken(row.token))
+      .map(row => ({ to: row.token, sound: 'default', title, body, data, priority: 'high' }));
+    if (messages.length === 0) return;
+    const chunks = expo.chunkPushNotifications(messages);
+    for (const chunk of chunks) await expo.sendPushNotificationsAsync(chunk);
+  } catch (e) { console.log('Push error:', e.message); }
+}
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -883,6 +901,18 @@ app.post('/api/notifications/:userId/read-all', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+app.post('/api/notifications/register-token', async (req, res) => {
+  try {
+    const { userId, token, platform } = req.body;
+    if (!userId || !token) return res.status(400).json({ success: false });
+    await pool.query(
+      `INSERT INTO push_tokens (user_id, token, platform) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, token) DO UPDATE SET created_at = NOW()`,
+      [userId, token, platform || 'ios']
+    );
+    res.json({ success: true });
+  } catch (e) { res.json({ success: false }); }
+});
 // ─── DEBUG ────────────────────────────────────────────────────────────────────
 
 app.get('/api/debug/photos/:vehicleId', async (req, res) => {
