@@ -798,83 +798,259 @@ app.post('/api/vehicles/:id/status', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// ─── APPOINTMENT ROUTES ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// PASTE ALL OF THIS INTO server.js WITH YOUR EXISTING ROUTES
+// ══════════════════════════════════════════════════════════════
 
+// ── DB migration: run once in Shell ──
+// Add these columns to appointments table if not already present:
+// proposed_date DATE, proposed_time TEXT, seller_id INTEGER
+
+// In your start() function add these migrations:
+// await pool.query('ALTER TABLE appointments ADD COLUMN IF NOT EXISTS proposed_date DATE');
+// await pool.query('ALTER TABLE appointments ADD COLUMN IF NOT EXISTS proposed_time TEXT');
+// await pool.query('ALTER TABLE appointments ADD COLUMN IF NOT EXISTS seller_id INTEGER');
+
+// ── Update createAppointment to notify seller and store seller_id ──
+// REPLACE your existing POST /api/appointments with this:
 app.post('/api/appointments', async (req, res) => {
   try {
-    const pool = getDb();
-    const b = req.body;
-    const vResult = await pool.query("SELECT * FROM vehicles WHERE id = $1", [b.vehicleId]);
-    const vehicle = vResult.rows[0];
-    if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
-    const result = await pool.query(
-      "INSERT INTO appointments (vehicle_id, buyer_id, seller_id, location_name, location_address, appointment_date, appointment_time) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-      [b.vehicleId, b.buyerId, vehicle.seller_id, b.locationName, b.locationAddress, b.appointmentDate, b.appointmentTime]
+    const { vehicleId, buyerId, locationName, locationAddress, appointmentDate, appointmentTime } = req.body;
+
+    // Get seller info from vehicle
+    const vehicleResult = await pool.query(
+      'SELECT seller_id FROM vehicles WHERE id = $1',
+      [vehicleId]
     );
-    await createNotification(pool, vehicle.seller_id, 'viewing_request', 'New Viewing Request 📅', `Someone wants to view your ${vehicle.make || 'vehicle'} on ${b.appointmentDate} at ${b.appointmentTime}.`);
-    res.json({ success: true, appointmentId: result.rows[0].id });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    const sellerId = vehicleResult.rows[0]?.seller_id;
+
+    const result = await pool.query(
+      `INSERT INTO appointments (vehicle_id, buyer_id, seller_id, location_name, location_address, appointment_date, appointment_time, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending') RETURNING id`,
+      [vehicleId, buyerId, sellerId, locationName, locationAddress, appointmentDate, appointmentTime]
+    );
+    const appointmentId = result.rows[0].id;
+
+    // Get vehicle name for notification
+    const vRow = await pool.query('SELECT year, make, model FROM vehicles WHERE id=$1', [vehicleId]);
+    const v = vRow.rows[0];
+    const vehicleName = v ? `${v.year} ${v.make} ${v.model}` : 'a vehicle';
+
+    // Notify seller
+    if (sellerId) {
+      await sendPushNotification(sellerId, '📅 New Viewing Request',
+        `Someone wants to view your ${vehicleName} on ${appointmentDate} at ${appointmentTime}`,
+        { type: 'viewing_request', appointmentId }
+      );
+    }
+
+    res.json({ success: true, appointmentId });
+  } catch (err) {
+    console.error('Create appointment error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.get('/api/appointments/user/:userId', async (req, res) => {
+// ── Get appointments for seller (pending requests) ──
+app.get('/api/appointments/seller/:sellerId', async (req, res) => {
   try {
-    const pool = getDb();
-    const uid = Number(req.params.userId);
+    const { sellerId } = req.params;
     const result = await pool.query(
-      `SELECT a.*, v.year, v.make, v.model, v.price, buyer.dvvia_id as buyer_dvvia_id, seller.dvvia_id as seller_dvvia_id
-       FROM appointments a JOIN vehicles v ON a.vehicle_id = v.id JOIN users buyer ON a.buyer_id = buyer.id JOIN users seller ON a.seller_id = seller.id
-       WHERE a.buyer_id = $1 OR a.seller_id = $1 ORDER BY a.appointment_date DESC`, [uid]
+      `SELECT a.*, v.year, v.make, v.model, v.price,
+       u.dvvia_id as buyer_dvvia_id
+       FROM appointments a
+       JOIN vehicles v ON a.vehicle_id = v.id
+       LEFT JOIN users u ON a.buyer_id = u.id
+       WHERE a.seller_id = $1
+       ORDER BY a.created_at DESC`,
+      [sellerId]
     );
     res.json({ success: true, appointments: result.rows });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.get('/api/appointments/booked-slots/:vehicleId/:date', async (req, res) => {
+// ── Accept viewing request ──
+app.post('/api/appointments/:id/accept', async (req, res) => {
   try {
-    const pool = getDb();
-    const { vehicleId, date } = req.params;
-    const result = await pool.query(
-      `SELECT appointment_time FROM appointments WHERE vehicle_id = $1 AND appointment_date = $2 AND status NOT IN ('cancelled')`,
-      [Number(vehicleId), date]
+    const { id } = req.params;
+    await pool.query(
+      "UPDATE appointments SET status='confirmed' WHERE id=$1",
+      [id]
     );
-    res.json({ success: true, bookedTimes: result.rows.map(r => r.appointment_time) });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    const appt = await pool.query(
+      'SELECT a.*, v.year, v.make, v.model FROM appointments a JOIN vehicles v ON a.vehicle_id=v.id WHERE a.id=$1',
+      [id]
+    );
+    const a = appt.rows[0];
+    if (a?.buyer_id) {
+      await sendPushNotification(a.buyer_id, '✅ Viewing Confirmed!',
+        `Your viewing of the ${a.year} ${a.make} ${a.model} is confirmed for ${a.appointment_date} at ${a.appointment_time}`,
+        { type: 'viewing_confirmed', appointmentId: id }
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
+// ── Decline viewing request ──
+app.post('/api/appointments/:id/decline', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(
+      "UPDATE appointments SET status='declined' WHERE id=$1",
+      [id]
+    );
+    const appt = await pool.query(
+      'SELECT a.*, v.year, v.make, v.model FROM appointments a JOIN vehicles v ON a.vehicle_id=v.id WHERE a.id=$1',
+      [id]
+    );
+    const a = appt.rows[0];
+    if (a?.buyer_id) {
+      await sendPushNotification(a.buyer_id, '❌ Viewing Declined',
+        `The seller declined your viewing request for the ${a.year} ${a.make} ${a.model}. Try a different time.`,
+        { type: 'viewing_declined', appointmentId: id }
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Propose alternative time ──
+app.post('/api/appointments/:id/propose-time', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { proposedDate, proposedTime } = req.body;
+    await pool.query(
+      "UPDATE appointments SET status='alt_proposed', proposed_date=$1, proposed_time=$2 WHERE id=$3",
+      [proposedDate, proposedTime, id]
+    );
+    const appt = await pool.query(
+      'SELECT a.*, v.year, v.make, v.model FROM appointments a JOIN vehicles v ON a.vehicle_id=v.id WHERE a.id=$1',
+      [id]
+    );
+    const a = appt.rows[0];
+    if (a?.buyer_id) {
+      await sendPushNotification(a.buyer_id, '🔄 Seller Proposed New Time',
+        `The seller suggested ${proposedDate} at ${proposedTime} for the ${a.year} ${a.make} ${a.model}. Tap to respond.`,
+        { type: 'alt_proposed', appointmentId: id }
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Buyer accepts alternative time ──
+app.post('/api/appointments/:id/accept-alt', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const appt = await pool.query('SELECT * FROM appointments WHERE id=$1', [id]);
+    const a = appt.rows[0];
+    if (!a) return res.status(404).json({ success: false });
+
+    await pool.query(
+      "UPDATE appointments SET status='confirmed', appointment_date=proposed_date, appointment_time=proposed_time, proposed_date=NULL, proposed_time=NULL WHERE id=$1",
+      [id]
+    );
+
+    if (a.seller_id) {
+      await sendPushNotification(a.seller_id, '✅ Buyer Accepted New Time',
+        `The buyer accepted your proposed time. Viewing confirmed for ${a.proposed_date} at ${a.proposed_time}.`,
+        { type: 'alt_accepted', appointmentId: id }
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Buyer declines alternative time ──
+app.post('/api/appointments/:id/decline-alt', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(
+      "UPDATE appointments SET status='declined', proposed_date=NULL, proposed_time=NULL WHERE id=$1",
+      [id]
+    );
+    const appt = await pool.query(
+      'SELECT a.*, v.year, v.make, v.model FROM appointments a JOIN vehicles v ON a.vehicle_id=v.id WHERE a.id=$1',
+      [id]
+    );
+    const a = appt.rows[0];
+    if (a?.seller_id) {
+      await sendPushNotification(a.seller_id, '❌ Buyer Declined New Time',
+        `The buyer declined your proposed time for the ${a.year} ${a.make} ${a.model}.`,
+        { type: 'alt_declined', appointmentId: id }
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── UPDATE arrive endpoint to send push notification ──
+// REPLACE your existing arrive endpoint with this:
 app.post('/api/appointments/:id/arrive', async (req, res) => {
   try {
-    const pool = getDb();
-    const col = req.body.role === 'buyer' ? 'buyer_arrived' : 'seller_arrived';
-    await pool.query(`UPDATE appointments SET ${col} = 1 WHERE id = $1`, [Number(req.params.id)]);
+    const { id } = req.params;
+    const { role } = req.body;
+    const field = role === 'buyer' ? 'buyer_arrived_at' : 'seller_arrived_at';
+    await pool.query(`UPDATE appointments SET ${field}=NOW() WHERE id=$1`, [id]);
+
+    const appt = await pool.query(
+      'SELECT a.*, v.year, v.make, v.model FROM appointments a JOIN vehicles v ON a.vehicle_id=v.id WHERE a.id=$1',
+      [id]
+    );
+    const a = appt.rows[0];
+    const notifyId = role === 'buyer' ? a.seller_id : a.buyer_id;
+    const label = role === 'buyer' ? 'Buyer' : 'Seller';
+
+    if (notifyId) {
+      await sendPushNotification(notifyId, `📍 ${label} Has Arrived`,
+        `The ${label.toLowerCase()} is at ${a.location_name} for the ${a.year} ${a.make} ${a.model} viewing.`,
+        { type: 'arrived', appointmentId: id }
+      );
+    }
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
+// ── UPDATE reportLate to send push notification ──
+// REPLACE your existing late endpoint with this:
 app.post('/api/appointments/:id/late', async (req, res) => {
   try {
-    const pool = getDb();
-    const col = req.body.role === 'buyer' ? 'buyer_late_minutes' : 'seller_late_minutes';
-    await pool.query(`UPDATE appointments SET ${col} = $1 WHERE id = $2`, [req.body.minutes, Number(req.params.id)]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-});
+    const { id } = req.params;
+    const { role, minutes } = req.body;
+    const appt = await pool.query(
+      'SELECT a.*, v.year, v.make, v.model FROM appointments a JOIN vehicles v ON a.vehicle_id=v.id WHERE a.id=$1',
+      [id]
+    );
+    const a = appt.rows[0];
+    const notifyId = role === 'buyer' ? a.seller_id : a.buyer_id;
+    const label = role === 'buyer' ? 'Buyer' : 'Seller';
 
-app.post('/api/appointments/:id/complete', async (req, res) => {
-  try {
-    const pool = getDb();
-    await pool.query("UPDATE appointments SET status = 'completed', completed_at = NOW() WHERE id = $1", [Number(req.params.id)]);
+    if (notifyId) {
+      await sendPushNotification(notifyId, `⏱️ ${label} Running ${minutes} Min Late`,
+        `The ${label.toLowerCase()} is running about ${minutes} minutes late to the ${a.year} ${a.make} ${a.model} viewing.`,
+        { type: 'running_late', appointmentId: id, minutes }
+      );
+    }
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
-
-app.post('/api/appointments/:id/cancel', async (req, res) => {
-  try {
-    const pool = getDb();
-    await pool.query("UPDATE appointments SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $1 WHERE id = $2", [req.body.userId, Number(req.params.id)]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-});
-
 // ─── NOTIFICATION ROUTES ──────────────────────────────────────────────────────
 
 app.get('/api/notifications/:userId', async (req, res) => {
